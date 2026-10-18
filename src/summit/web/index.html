@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Summit</title>
+<link rel="stylesheet" href="/web/shared.css">
+<script src="/web/core.js"></script>
+<script src="/web/i18n.js"></script>
+<style>
+  /* layout only: components come from shared.css */
+  body { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+  header.top { gap: 14px; }
+  .search { flex: 1; min-width: 160px; max-width: 420px; }
+  .search input { width: 100%; }
+  #frames { position: relative; min-height: 0; }
+  #frames iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: none; background: var(--bg); }
+  #frames iframe.on { display: block; }
+  .boot { position: absolute; inset: 0; display: grid; place-items: center; color: var(--cyan); letter-spacing: .3em; text-transform: uppercase; }
+  .boot::after { content: "▌"; color: var(--yellow); animation: blink 1s steps(1) infinite; }
+  .help.hint { position: absolute; left: 18px; top: 100%; margin-top: 6px; padding: 5px 10px; background: rgba(5, 4, 10, .9); border: 1px solid var(--line); z-index: 20; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 3 2 21h20L12 3zm0 5.2 3.2 5.6-1.7 1.4-1.5-2-2.6 3.4L7.9 15 12 8.2z"/></svg>
+    <span>Summit</span>
+  </div>
+  <div class="tabs" id="modes"><button data-v="map" class="on" data-i18n="mode.map">Map</button><button data-v="tag" data-i18n="mode.tag">Tag</button><button data-v="flow" data-i18n="mode.flow">Flow</button></div>
+  <div class="seg" id="space"></div>
+  <label class="ctl"><span data-i18n="color">Color</span> <select id="color"></select></label>
+  <span class="ctl"><span data-i18n="labels">Labels</span>
+    <span class="seg" id="labelsTog"><button data-v="fam" data-i18n="genres">Genres</button><button data-v="sub" data-i18n="subgenres">Subgenres</button></span></span>
+  <div class="search"><input id="q" data-i18n-ph="searchPh" placeholder="Search a vibe or a name" autocomplete="off" spellcheck="false"></div>
+  <div class="seg" id="lang"><button data-v="en">EN</button><button data-v="ja">日本語</button></div>
+  <span class="help hint small" data-i18n-html="shellHelp"></span>
+</header>
+<div id="frames"><div class="boot" id="boot" data-i18n="loading">Loading library</div></div>
+<footer id="player"></footer>
+
+<script>
+const H = window.Summit, frames = document.getElementById('frames');
+const PAGES = { map: '/web/map.html', tag: '/web/tag.html', flow: '/web/flow.html' };
+const loaded = {};
+H.applyLang(document);
+
+function setMode(m) {
+  H.mode = m;
+  document.querySelectorAll('#modes button').forEach(b => b.classList.toggle('on', b.dataset.v === m));
+  if (!loaded[m]) {
+    const f = document.createElement('iframe');
+    f.src = PAGES[m]; f.dataset.mode = m;
+    f.addEventListener('load', () => { H.applyHelp(f.contentDocument); H.applyLang(f.contentDocument); });
+    frames.appendChild(f); loaded[m] = f;
+  }
+  Object.entries(loaded).forEach(([k, f]) => f.classList.toggle('on', k === m));
+  H.emit('mode', m);
+}
+
+function colorMenu() {
+  const d = H.data, sel = document.getElementById('color'), cats = {};
+  d.tags.forEach(t => (cats[t.category] = cats[t.category] || []).push(t.name));
+  sel.innerHTML = ['cluster', 'family', 'bpm', 'tagged'].map(v => `<option value="${v}">${H.t('color.' + v)}</option>`).join('') +
+    Object.entries(cats).map(([c, ts]) => `<optgroup label="${H.esc(H.t('cat.' + c))}">${ts.map(t => `<option value="tag:${H.esc(t)}">${H.esc(t)}</option>`).join('')}</optgroup>`).join('');
+  sel.value = H.color;
+}
+function syncToggles() {
+  document.querySelectorAll('#labelsTog button').forEach(b => b.classList.toggle('on', !!H.labelShow[b.dataset.v]));
+  document.querySelectorAll('#lang button').forEach(b => b.classList.toggle('on', b.dataset.v === H.lang));
+}
+
+H.ready.then(d => {
+  document.getElementById('boot').remove();
+  if (!d.tracks.length) { frames.innerHTML = `<div class="boot">${H.t('noTracks')}</div>`; return; }
+  document.getElementById('space').innerHTML = d.spaceList.map(s => `<button data-v="${s.key}" class="${s.key === H.space ? 'on' : ''}">${H.esc(s.label)}</button>`).join('');
+  colorMenu();
+  H.on('tags', colorMenu);  // new vibes appear in the colour menu
+  H.renderPlayer();
+  H.applyHelp(document);
+  let m = 'map'; try { m = localStorage.getItem('summit.mode') || 'map'; } catch (e) {}
+  setMode(PAGES[m] ? m : 'map');
+});
+syncToggles();
+
+document.getElementById('modes').onclick = e => { const b = e.target.closest('button'); if (b) { setMode(b.dataset.v); try { localStorage.setItem('summit.mode', b.dataset.v); } catch (e) {} } };
+document.getElementById('space').onclick = e => {
+  const b = e.target.closest('button'); if (!b || b.disabled) return;
+  document.querySelectorAll('#space button').forEach(x => x.classList.toggle('on', x === b));
+  H.setSpace(b.dataset.v);
+};
+document.getElementById('color').onchange = e => H.setColor(e.target.value);
+H.on('color', m => { document.getElementById('color').value = m; });  // modes can change it too
+document.getElementById('labelsTog').onclick = e => {
+  const b = e.target.closest('button'); if (!b) return;
+  H.setLabels({ ...H.labelShow, [b.dataset.v]: !H.labelShow[b.dataset.v] }); syncToggles();
+};
+document.getElementById('lang').onclick = e => {
+  const b = e.target.closest('button'); if (!b || b.dataset.v === H.lang) return;
+  H.setLang(b.dataset.v); syncToggles();
+  if (H.data) { colorMenu(); H.renderPlayer(); }
+};
+const q = document.getElementById('q');
+q.addEventListener('keydown', e => {
+  if (e.key === 'Enter') H.search(q.value).catch(err => H.toast(err.message));
+  if (e.key === 'Escape') { q.value = ''; H.search(''); q.blur(); }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Summit Flow</title>
+<link rel="stylesheet" href="/web/shared.css">
+<script src="/web/vendor/plotly.min.js"></script>
+<script src="/web/map.js"></script>
+<style>
+  /* layout only: components come from shared.css */
+  body { display: grid; grid-template-rows: minmax(0, 1fr) 3px var(--flow-h, 320px); }
+  #mapwrap { position: relative; min-height: 0; overflow: hidden; }
+  #map { position: absolute; inset: 0; }
+  #map.dragging-stage { cursor: grabbing; }
+  .flowbar { top: 12px; right: 12px; padding: 9px 12px; flex-wrap: nowrap; }
+  .flowbar input[type=range] { width: 90px; }
+  .flowbar select { width: 150px; }
+  .flowbar .pool { color: var(--muted); min-width: 96px; text-shadow: none; }
+  .hint.float { bottom: 12px; left: 50%; transform: translateX(-50%); padding: 7px 16px; white-space: nowrap; }
+  .hint b { color: var(--text); font-weight: 400; }
+  .bottom { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-height: 0; border-top: 1px solid var(--line); }
+  .bhead { display: flex; align-items: center; gap: 14px; padding: 10px 14px 8px; flex-wrap: wrap; }
+  .stages { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; flex: 1; }
+  .timeline { margin: 0 14px 8px; }
+  .list { overflow: auto; min-height: 0; border-top: 1px solid var(--line); }
+  td.idx .badge { width: 20px; height: 20px; }
+</style>
+</head>
+<body>
+<div id="mapwrap">
+  <div id="map" class="mapbg"></div>
+  <div class="float flowbar toolbar">
+    <button class="primary" id="newFlow" data-i18n="newFlow">＋ New flow</button>
+    <button id="undo" data-i18n-title="undo">↶</button><button id="redo" data-i18n-title="redo">↷</button>
+    <span class="sep"></span>
+    <label data-i18n-title="radiusTip"><span data-i18n="radius">Radius</span> <input type="range" id="radius" min="0.3" max="4" step="0.1"></label><span class="val" id="radiusV"></span>
+    <span class="val pool" id="poolV"></span>
+    <label data-i18n-title="lengthTip"><span data-i18n="length">Length</span> <input type="range" id="len" min="30" max="240" step="15"></label><span class="val" id="lenV"></span>
+    <button id="shuffle" data-i18n-title="shuffleTip" data-i18n="shuffle">⤨ Shuffle</button>
+    <span class="sep"></span>
+    <select id="flows" data-i18n-title="savedFlowsTip"></select>
+    <button id="save" data-i18n="save">Save</button>
+  </div>
+  <div class="float hint help" id="hint"></div>
+</div>
+<div class="split-y" id="splitFlow"></div>
+<section class="bottom surface" id="bottom">
+  <div class="bhead" id="bhead"></div>
+  <div class="timeline" id="timeline"></div>
+  <div class="list" id="list"></div>
+</section>
+<div class="palette" id="pal"><div class="box"><input id="pq" data-i18n-ph="palPh" autocomplete="off"><div class="res" id="pres"></div></div></div>
+
+<script>
+// A flow = ordered stage anchors (tracks) + a corridor radius + a target length. Tracks inside the corridor around the
+// route form the pool; each slot along the route draws one of them (stable shuffle per seed).
+const H = S.H, t_ = H.t, map = document.getElementById('map');
+const st = { flow: { stages: [], radius: 1.2, length: 90, excluded: [], seed: 1 }, sel: null, res: null, saved: null };
+const undoStack = [], redoStack = [];
+let AVG_DUR = 300;
+
+function edit(label, fn) { undoStack.push({ label, flow: JSON.stringify(st.flow) }); redoStack.length = 0; fn(st.flow); render(); }
+function undo() { const u = undoStack.pop(); if (!u) return; redoStack.push({ label: u.label, flow: JSON.stringify(st.flow) }); st.flow = JSON.parse(u.flow); st.sel = null; render(); S.toast(t_('undid', { x: t_(u.label) })); }
+function redo() { const r = redoStack.pop(); if (!r) return; undoStack.push({ label: r.label, flow: JSON.stringify(st.flow) }); st.flow = JSON.parse(r.flow); st.sel = null; render(); S.toast(t_('redid', { x: t_(r.label) })); }
+
+// ---- route + picks ----
+let drag = null;   // { k, x, y } while dragging a stage
+function stagePts() {
+  const L = S.layout(H.space);
+  return st.flow.stages.map((j, k) => (drag && drag.k === k && drag.x != null ? [drag.x, drag.y] : [L.x[j], L.y[j]]));
+}
+function compute() {
+  const f = st.flow, W = stagePts(), L = S.layout(H.space);
+  if (W.length < 2) return { W, pool: [], picks: f.stages.map((j, k) => ({ j, s: 0, anchor: k })), short: 0 };
+  const cum = [0];
+  for (let k = 0; k < W.length - 1; k++) cum.push(cum[k] + Math.hypot(W[k + 1][0] - W[k][0], W[k + 1][1] - W[k][1]));
+  const total = cum[cum.length - 1] || 1e-9, ex = new Set(f.excluded), anchors = new Set(f.stages), pool = [];
+  for (let i = 0; i < L.x.length; i++) {
+    if (ex.has(i) || anchors.has(i)) continue;
+    let best = null;
+    for (let k = 0; k < W.length - 1; k++) {
+      const [ax, ay] = W[k], dx = W[k + 1][0] - ax, dy = W[k + 1][1] - ay, len2 = dx * dx + dy * dy || 1e-9;
+      const u = Math.max(0, Math.min(1, ((L.x[i] - ax) * dx + (L.y[i] - ay) * dy) / len2));
+      const dd = Math.hypot(L.x[i] - (ax + u * dx), L.y[i] - (ay + u * dy));
+      if (!best || dd < best.d) best = { j: i, d: dd, s: cum[k] + u * Math.sqrt(len2) };
+    }
+    if (best.d <= f.radius) pool.push(best);
+  }
+  const slots = Math.max(0, Math.round((f.length * 60) / AVG_DUR) - f.stages.length), used = new Set();
+  const rnd = j => { let h = (j * 2654435761 + (f.seed || 1) * 40503) >>> 0; h ^= h >>> 15; h = Math.imul(h, 2246822519) >>> 0; return (h ^ (h >>> 13)) >>> 0; };
+  const picks = f.stages.map((j, k) => ({ j, s: cum[k], anchor: k }));
+  let short = 0;
+  for (let q = 0; q < slots; q++) {
+    const a = (total * q) / slots, b = (total * (q + 1)) / slots;
+    let best = null;
+    for (const p of pool) if (p.s >= a && p.s < b && !used.has(p.j) && (!best || rnd(p.j) < rnd(best.j))) best = p;
+    if (best) { used.add(best.j); picks.push(best); } else short++;
+  }
+  picks.sort((a, b) => a.s - b.s || (a.anchor != null ? -1 : 1));
+  return { W, pool, picks, short };
+}
+
+// ---- drawing ----
+const stageColor = j => S.col(S.tracks[j].cluster);
+function drawMap() {
+  const r = st.res, W = r.W, f = st.flow;
+  Plotly.restyle(map, { x: [W.map(p => p[0]), W.map(p => p[0])], y: [W.map(p => p[1]), W.map(p => p[1])] }, [2, 3]);
+  // Marks beat data (DESIGN.md): stage markers are annotations drawn after the cluster labels so they sit on top.
+  const marks = W.flatMap(([x, y], k) => [
+    { x, y, text: ' ', showarrow: false, width: 30, height: 30, bgcolor: 'rgba(0,0,0,0)', bordercolor: stageColor(f.stages[k]), borderwidth: 3 },
+    { x, y, text: String(k + 1), showarrow: false, width: 20, height: 20, bgcolor: '#000000', bordercolor: k === st.sel ? H.UI.selected : H.UI.focus, borderwidth: 2, borderpad: 1,
+      font: { family: 'Orbitron, sans-serif', size: 11, color: '#ffffff' } },
+  ]);
+  const shapes = [], rad = f.radius, sty = { fillcolor: 'rgba(255,255,255,.07)', layer: 'below', line: { width: 0 } };
+  for (let k = 0; k < W.length - 1; k++) {
+    const [x1, y1] = W[k], [x2, y2] = W[k + 1], len = Math.hypot(x2 - x1, y2 - y1) || 1e-9, nx = (-(y2 - y1) / len) * rad, ny = ((x2 - x1) / len) * rad;
+    shapes.push({ type: 'path', path: `M${x1 + nx},${y1 + ny} L${x2 + nx},${y2 + ny} L${x2 - nx},${y2 - ny} L${x1 - nx},${y1 - ny} Z`, ...sty });
+  }
+  W.forEach(([x, y]) => shapes.push({ type: 'circle', x0: x - rad, x1: x + rad, y0: y - rad, y1: y + rad, ...sty }));
+  S.setAnnotations(map, marks, { shapes });
+  const op = new Array(S.tracks.length).fill(W.length >= 2 ? S.DOT.fade : 1);
+  r.pool.forEach(p => (op[p.j] = 1));
+  r.picks.forEach(p => (op[p.j] = 1));
+  S.setOpacity(map, op);
+  ringPicks();
+}
+function ringPicks(hoverJ) {
+  const idxs = st.res.picks.filter(p => p.anchor == null).map(p => p.j);
+  if (hoverJ != null) idxs.push(hoverJ);
+  S.highlight(map, idxs, H.space);
+  Plotly.restyle(map, { 'marker.size': [idxs.map((j, k) => (hoverJ != null && k === idxs.length - 1 ? 22 : 14))] }, [1]);
+}
+function render() {
+  st.res = compute();
+  if (st.sel != null && st.sel >= st.flow.stages.length) st.sel = null;
+  drawMap(); renderBottom(); renderBar();
+}
+function renderBar() {
+  const f = st.flow, n = f.stages.length;
+  document.getElementById('radius').value = f.radius; document.getElementById('radiusV').textContent = f.radius.toFixed(1);
+  document.getElementById('len').value = f.length; document.getElementById('lenV').textContent = f.length >= 60 ? `${Math.floor(f.length / 60)}h${String(f.length % 60).padStart(2, '0')}` : `${f.length}m`;
+  document.getElementById('undo').disabled = !undoStack.length; document.getElementById('undo').title = undoStack.length ? t_('undoX', { x: t_(undoStack[undoStack.length - 1].label) }) : t_('nothingUndo');
+  document.getElementById('redo').disabled = !redoStack.length;
+  document.getElementById('poolV').textContent = n > 1 ? t_('inCorridor', { n: st.res.pool.length }) : '';
+  document.getElementById('shuffle').disabled = n < 2;
+  document.getElementById('save').disabled = st.res.picks.length < 2;
+  document.getElementById('flows').innerHTML = `<option value="">${t_('savedFlows')}</option>` + S.data.playlists.filter(p => p.kind === 'flow').map(p => `<option value="${p.id}" ${p.id === st.saved ? 'selected' : ''}>${S.esc(p.name)}</option>`).join('');
+  document.getElementById('hint').innerHTML = t_(n === 0 ? 'hint0' : n === 1 ? 'hint1' : 'hint2');
+}
+function renderBottom() {
+  const { picks } = st.res, f = st.flow, cur = H.player.current;
+  const total = picks.reduce((a, p) => a + S.tracks[p.j].dur, 0);
+  document.getElementById('bhead').innerHTML = `
+    <h2>${t_('flow')}</h2>
+    <div class="stats"><div class="stat"><b>${picks.length}</b><span>${t_('tracks')}</span></div><div class="stat"><b>${S.fmtDur(total)}</b><span>${t_('length')}</span></div>
+      ${f.stages.length > 1 ? `<div class="stat"><b>${st.res.pool.length}</b><span>${t_('inCorridorStat')}</span></div>` : ''}${st.res.short ? `<div class="stat warn"><b>${st.res.short}</b><span>${t_('short')}</span></div>` : ''}</div>
+    <div class="stages">${f.stages.map((j, k) => `${k ? '<span class="arrow">›</span>' : ''}<span class="stage ${k === st.sel ? 'sel' : ''}" data-stage="${k}" style="--c:${stageColor(j)}"><span class="badge" style="--c:${stageColor(j)}">${k + 1}</span>${S.esc(H.clusterName(S.tracks[j].cluster))}<button data-del="${k}" title="${t_('deleteStage')}">×</button></span>`).join('') || `<span class="hint">${t_('noStages')}</span>`}</div>
+    <button class="primary" id="playFlow" ${picks.length ? '' : 'disabled'}>${t_('playFlow')}</button>`;
+  const tl = document.getElementById('timeline');
+  if (!picks.length) tl.innerHTML = `<div class="empty">${t_('timelineEmpty')}</div>`;
+  else {
+    let acc = 0; const pts = [];
+    const bpms = picks.map(p => S.tracks[p.j].bpm || 120), lo = Math.min(...bpms) - 3, hi = Math.max(...bpms) + 3;
+    const blocks = picks.map(p => {
+      const t = S.tracks[p.j], mid = (acc + t.dur / 2) / total; acc += t.dur;
+      pts.push(`${(mid * 1000).toFixed(1)},${(((hi - (t.bpm || 120)) / (hi - lo)) * 100).toFixed(1)}`);
+      return `<div class="blk ${p.anchor != null ? 'anchor' : ''} ${p.j === cur ? 'playing' : ''}" data-i="${p.j}" data-n="${p.anchor != null ? p.anchor + 1 : ''}" style="flex-grow:${t.dur};--c:${S.col(t.cluster)}" title="${S.esc(t.title)} · ${S.esc(t.artist)} · ${t.bpm ?? '?'} BPM"></div>`;
+    }).join('');
+    tl.innerHTML = blocks + `<svg viewBox="0 0 1000 100" preserveAspectRatio="none"><polyline points="${pts.join(' ')}" fill="none" stroke="#fff" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>
+      <span class="bpmlab" style="top:2px">${hi - 3}</span><span class="bpmlab" style="bottom:2px">${lo + 3} BPM</span>`;
+  }
+  let t0 = 0;
+  document.getElementById('list').innerHTML = !picks.length ? `<div class="empty">${t_('listEmpty')}</div>` : `<table>
+    <thead><tr><th></th><th class="bar"></th><th>${t_('start')}</th><th>${t_('title')}</th><th>${t_('artist')}</th><th>BPM</th><th>${t_('key')}</th><th>${t_('cluster')}</th><th></th><th></th></tr></thead><tbody>
+    ${picks.map((p, n) => { const t = S.tracks[p.j], start = t0; t0 += t.dur; return `<tr data-i="${p.j}" class="${p.anchor != null ? 'anchor' : ''} ${p.j === cur ? 'playing' : ''}">
+      <td class="idx">${p.anchor != null ? `<span class="badge" style="--c:${S.col(t.cluster)}">${p.anchor + 1}</span>` : n + 1}</td><td class="bar" style="--c:${S.col(t.cluster)}"></td>
+      <td class="num">${S.fmtDur(start)}</td><td>${S.esc(t.title)}</td><td class="muted">${S.esc(t.artist)}</td>
+      <td class="num">${t.bpm ?? ''}</td><td class="num">${t.key ?? ''}</td><td class="muted">${S.esc(H.clusterName(t.cluster))}</td>
+      <td>${S.heart(p.j)}</td><td>${p.anchor != null ? '' : `<button class="x" data-x="${p.j}" title="${t_('removeTrack')}">✕</button>`}</td></tr>`; }).join('')}
+    </tbody></table>`;
+}
+
+// ---- map mouse: click adds/inserts, drag moves stages, plain drag elsewhere pans ----
+const relPos = e => { const r = map.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+function hitStage(px, py) {
+  const W = stagePts();
+  for (let k = W.length - 1; k >= 0; k--) { const [sx, sy] = S.toPx(map, ...W[k]); if (Math.max(Math.abs(sx - px), Math.abs(sy - py)) < 17) return k; }
+  return -1;
+}
+function hitSegment(px, py) {
+  const W = stagePts().map(p => S.toPx(map, ...p));
+  for (let k = 0; k < W.length - 1; k++) {
+    const [ax, ay] = W[k], dx = W[k + 1][0] - ax, dy = W[k + 1][1] - ay, len2 = dx * dx + dy * dy || 1;
+    const u = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2));
+    if (Math.hypot(px - (ax + u * dx), py - (ay + u * dy)) < 8) return k;
+  }
+  return -1;
+}
+let down = null;
+map.addEventListener('mousedown', e => {
+  if (e.button !== 0 || e.ctrlKey || !map._fullLayout) return;
+  const [px, py] = relPos(e), k = hitStage(px, py);
+  down = { px, py, moved: false };
+  if (k >= 0) { e.preventDefault(); e.stopPropagation(); drag = { k, x: null, y: null }; map.classList.add('dragging-stage'); }
+}, true);
+document.addEventListener('mousemove', e => {
+  if (!down) return;
+  const [px, py] = relPos(e);
+  if (Math.hypot(px - down.px, py - down.py) > 4) down.moved = true;
+  if (drag && down.moved) {
+    [drag.x, drag.y] = S.toData(map, px, py);
+    if (!drag.raf) drag.raf = requestAnimationFrame(() => { if (drag) { drag.raf = 0; st.res = compute(); drawMap(); } });
+  }
+}, true);
+document.addEventListener('mouseup', () => {
+  if (!down) return;
+  const dd = down; down = null;
+  if (drag) {
+    const dr = drag; drag = null; map.classList.remove('dragging-stage');
+    if (dd.moved && dr.x != null) { const j = S.nearest(dr.x, dr.y, H.space); edit('op.move', f => (f.stages[dr.k] = j)); }
+    else { st.sel = st.sel === dr.k ? null : dr.k; render(); }
+    return;
+  }
+  if (dd.moved) return;   // that was a pan
+  const [x, y] = S.toData(map, dd.px, dd.py), j = S.nearest(x, y, H.space), seg = hitSegment(dd.px, dd.py);
+  if (seg >= 0) edit('op.insert', f => f.stages.splice(seg + 1, 0, j));
+  else edit('op.add', f => f.stages.push(j));
+  st.sel = null;
+});
+
+S.ready.then(() => {
+  AVG_DUR = S.tracks.reduce((a, t) => a + t.dur, 0) / S.tracks.length;
+  S.plot(map, { space: H.space, colorMode: H.color, config: { doubleClick: false } }).then(() => {
+    map.on('plotly_hover', e => { const p = e.points.find(p => p.curveNumber === 0); if (p && e.event && e.event.altKey) H.player.audition(p.pointIndex); });
+    Plotly.restyle(map, { 'line.width': [12, 2.5] }, [2, 3]);
+    render();
+    S.splitter(document.getElementById('splitFlow'), { target: document.getElementById('bottom'), cssVar: '--flow-h', axis: 'y', sign: -1, min: 150, max: window.innerHeight - 200, key: 'summit.flow.h', onResize: () => Plotly.Plots.resize(map) });
+  });
+});
+
+// ---- controls ----
+document.getElementById('newFlow').onclick = () => { if (st.flow.stages.length) edit('op.new', f => { f.stages = []; f.excluded = []; }); st.sel = null; st.saved = null; render(); S.toast(t_('newFlowToast')); };
+document.getElementById('undo').onclick = undo;
+document.getElementById('redo').onclick = redo;
+document.getElementById('shuffle').onclick = () => edit('op.shuffle', f => (f.seed = (f.seed || 1) + 1));
+let sliderBefore = null;
+for (const [id, key, parse] of [['radius', 'radius', parseFloat], ['len', 'length', parseInt]]) {
+  const el = document.getElementById(id);
+  el.addEventListener('pointerdown', () => (sliderBefore = JSON.stringify(st.flow)));
+  el.addEventListener('input', () => { st.flow[key] = parse(el.value); render(); });
+  el.addEventListener('change', () => {
+    if (sliderBefore && sliderBefore !== JSON.stringify(st.flow)) { undoStack.push({ label: `op.${key}`, flow: sliderBefore }); redoStack.length = 0; renderBar(); }
+    sliderBefore = null;
+  });
+}
+// Saved flows store track ids (stable across re-analysis), not array indexes.
+const toIds = idxs => idxs.map(i => S.tracks[i].id), toIdx = ids => ids.map(id => S.data.byId[id]).filter(i => i != null);
+document.getElementById('save').onclick = async () => {
+  const name = prompt(t_('saveFlowPrompt'), st.saved ? S.data.playlists.find(p => p.id === st.saved)?.name : t_('flowName', { x: new Date().toLocaleDateString() }));
+  if (!name) return;
+  const f = st.flow, data = { stages: toIds(f.stages), excluded: toIds(f.excluded), radius: f.radius, length: f.length, seed: f.seed, space: H.space };
+  try {
+    const r = await H.createPlaylist(name, st.res.picks.map(p => p.j), 'flow', data);
+    st.saved = r.id; renderBar(); S.toast(t_('savedN', { x: name, n: st.res.picks.length }));
+  } catch (err) { S.toast(err.message); }
+};
+document.getElementById('flows').onchange = e => {
+  const p = S.data.playlists.find(p => p.id === +e.target.value); if (!p || !p.data) return;
+  if (p.data.space && p.data.space !== H.space) H.setSpace(p.data.space);
+  edit('op.open', f => Object.assign(f, { stages: toIdx(p.data.stages), excluded: toIdx(p.data.excluded || []), radius: p.data.radius, length: p.data.length, seed: p.data.seed || 1 }));
+  st.saved = p.id; renderBar();
+};
+
+const playFrom = j => H.player.play(j, { queue: st.res.picks.map(p => p.j), label: t_('flow') });
+document.getElementById('bottom').addEventListener('click', e => {
+  const del = e.target.closest('[data-del]'); if (del) { const k = +del.dataset.del; edit('op.delete', f => f.stages.splice(k, 1)); return; }
+  const stg = e.target.closest('[data-stage]'); if (stg) { st.sel = +stg.dataset.stage === st.sel ? null : +stg.dataset.stage; render(); return; }
+  const x = e.target.closest('[data-x]'); if (x) { const j = +x.dataset.x; edit('op.remove', f => f.excluded.push(j)); return; }
+  if (e.target.id === 'playFlow') { playFrom(st.res.picks[0].j); return; }
+  const r = e.target.closest('[data-i]'); if (r) playFrom(+r.dataset.i);
+});
+document.getElementById('bottom').addEventListener('mouseover', e => { const r = e.target.closest('[data-i]'); ringPicks(r ? +r.dataset.i : null); });
+document.getElementById('bottom').addEventListener('mouseleave', () => ringPicks());
+document.addEventListener('keydown', e => {
+  if (e.target.closest('input, select, textarea')) return;
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
+  if ((e.key === 'Backspace' || e.key === 'Delete') && st.sel != null) { e.preventDefault(); const k = st.sel; st.sel = null; edit('op.delete', f => f.stages.splice(k, 1)); }
+  if (e.key === 'Escape' && st.sel != null) { st.sel = null; render(); }
+  if (mod && e.key === 'k') { e.preventDefault(); openPal(); }
+});
+
+H.on('space', s => { S.setSpace(map, s); render(); });
+H.on('color', m => S.setColor(map, m));
+H.on('clusters', () => render());
+H.on('player', () => renderBottom());
+H.on('playlists', () => renderBar());
+H.on('lang', () => { if (st.res) { renderBottom(); renderBar(); } });
+H.on('search', (res, q) => {
+  if (H.mode !== 'flow') return;
+  if (!res) { render(); return; }
+  S.focus(map, res); S.highlight(map, res, H.space); S.toast(t_('matches', { n: res.length }));
+});
+
+// ---- ⌘K palette: pick a result to add it as the next stage ----
+const pal = document.getElementById('pal'), pq = document.getElementById('pq'), pres = document.getElementById('pres');
+function openPal() { pal.classList.add('on'); pq.value = ''; pres.innerHTML = `<div class="hint" style="padding:8px">${t_('palHint')}</div>`; pq.focus(); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') pal.classList.remove('on'); });
+pal.addEventListener('click', e => { if (e.target === pal) pal.classList.remove('on'); });
+pq.addEventListener('keydown', async e => {
+  if (e.key !== 'Enter') return;
+  const res = await H.find(pq.value);
+  pres.innerHTML = res.map(r => { const t = S.tracks[r.i]; return `<div class="row" data-i="${r.i}"><button class="play" data-prev="${r.i}" title="${t_('preview')}">▶</button><span class="dot" style="--c:${S.col(t.cluster)}"></span><span class="grow">${S.esc(t.title)} <span class="muted">· ${S.esc(t.artist)}</span></span><span class="muted small">${t.bpm ?? ''}</span>${S.heart(r.i)}</div>`; }).join('');
+});
+pres.addEventListener('click', e => {
+  const pv = e.target.closest('[data-prev]'); if (pv) { H.player.play(+pv.dataset.prev, { label: t_('searchPreview') }); return; }
+  const r = e.target.closest('.row[data-i]'); if (!r) return;
+  const j = +r.dataset.i, L = S.layout(H.space);
+  pal.classList.remove('on');
+  edit('op.add', f => f.stages.push(j));
+  Plotly.relayout(map, { 'xaxis.range': [L.x[j] - 5, L.x[j] + 5], 'yaxis.range': [L.y[j] - 5, L.y[j] + 5] });
+});
+</script>
+</body>
+</html>

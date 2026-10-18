@@ -1,0 +1,26 @@
+[project]
+name = "summit"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.11"
+dependencies = [
+    "essentia>=2.1b6.dev1389",
+    "fastapi>=0.143.3",
+    "mutagen>=1.48.1",
+    "numpy>=2.4.6",
+    "onnxruntime>=1.31.0",
+    "pywebview>=6.2.1",
+    "scikit-learn>=1.9.1",
+    "soxr>=1.1.0",
+    "torch>=2.14.1",
+    "transformers>=4.46,<5",
+    "umap-learn>=0.5.12",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.scripts]
+summit = "summit:main"
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"

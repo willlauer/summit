@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Summit Map</title>
+<link rel="stylesheet" href="/web/shared.css">
+<script src="/web/vendor/plotly.min.js"></script>
+<script src="/web/map.js"></script>
+<style>
+  /* layout only: components come from shared.css */
+  body { display: grid; grid-template-columns: minmax(0, 1fr) 3px var(--panel-w, 400px); }
+  #map { min-height: 0; min-width: 0; overflow: hidden; }
+  .panel { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); }
+  .panel .tabs { padding: 0 10px; border-bottom: 1px solid var(--line); }
+  .body { padding: 14px 16px; overflow: auto; flex: 1; }
+  .pl { display: flex; align-items: center; gap: 8px; padding: 8px 4px; border-top: 1px solid var(--line-soft); }
+  .note { position: absolute; left: 16px; bottom: 16px; max-width: 320px; padding: 12px 14px; z-index: 5; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="map" class="mapbg"></div>
+<div class="split-x" id="splitPanel"></div>
+<aside class="panel surface" id="panel">
+  <div class="tabs" id="tabs">
+    <button data-v="track" class="on"><span data-i18n="tab.track">Track</span></button>
+    <button data-v="selection"><span data-i18n="tab.selection">Selection</span> <span class="n" id="selN">0</span></button>
+    <button data-v="playlists"><span data-i18n="tab.playlists">Playlists</span> <span class="n" id="plN">0</span></button>
+    <button data-v="liked"><span data-i18n="tab.liked">Liked</span> <span class="n" id="likeN">0</span></button>
+  </div>
+  <div class="body" id="body"></div>
+</aside>
+<div class="note frame help" data-i18n-html="mapHelp"></div>
+
+<script>
+const H = S.H, t_ = H.t, map = document.getElementById('map'), body = document.getElementById('body');
+// Selection is a kind (lasso | search | playlist) plus a name, so its label can be shown in either language.
+const st = { tab: 'track', cur: null, nbrs: [], sel: [], selKind: '', selName: '' };
+const selLabel = () => ({ lasso: t_('lasso'), search: t_('search', { x: st.selName }), playlist: st.selName })[st.selKind] || '';
+const similar = i => t_('similarTo', { x: S.tracks[i].title });
+
+S.ready.then(() => {
+  S.plot(map, { space: H.space, colorMode: H.color }).then(() => {
+    map.on('plotly_hover', e => { const p = e.points.find(p => p.curveNumber === 0); if (p && e.event && e.event.altKey) H.player.audition(p.pointIndex); });
+    map.on('plotly_click', async e => {
+      const p = e.points.find(p => p.curveNumber === 0); if (!p) return;
+      await showTrack(p.pointIndex);
+      H.player.play(p.pointIndex, { queue: [p.pointIndex, ...st.nbrs], label: similar(p.pointIndex) });
+    });
+    S.ctrlLasso(map, (idxs, add) => {
+      st.sel = add && st.selKind === 'lasso' ? [...new Set([...st.sel, ...idxs])] : idxs;
+      st.selKind = 'lasso'; S.focus(map, st.sel); setTab('selection');
+    }, clearSel);
+    S.splitter(document.getElementById('splitPanel'), { target: document.getElementById('panel'), cssVar: '--panel-w', sign: -1, min: 300, max: 900, key: 'summit.map.panel', onResize: () => Plotly.Plots.resize(map) });
+    setTab('playlists');
+  });
+});
+
+async function showTrack(i) {
+  st.cur = i;
+  st.nbrs = await H.neighbors(i, 10);
+  S.highlight(map, [i, ...st.nbrs], H.space);
+  setTab('track');
+}
+
+function setTab(t) {
+  st.tab = t;
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === t));
+  document.getElementById('selN').textContent = st.sel.length;
+  document.getElementById('plN').textContent = S.data.playlists.length;
+  document.getElementById('likeN').textContent = S.data.liked.length;
+  body.innerHTML = { track: trackHTML, selection: selectionHTML, playlists: playlistsHTML, liked: likedHTML }[t]();
+}
+
+function trackRow(j, list) {
+  const t = S.tracks[j];
+  return `<div class="row${H.player.current === j ? ' playing' : ''}" data-act="open" data-list="${list}" data-i="${j}"><span class="dot" style="--c:${S.col(t.cluster)}"></span>
+    <span class="grow">${S.esc(t.title)} <span class="muted">· ${S.esc(t.artist)}</span></span><span class="muted small">${t.bpm ?? ''}</span>${S.heart(j)}</div>`;
+}
+
+function trackHTML() {
+  if (st.cur == null) return `<div class="empty">${t_('clickDot')}</div>`;
+  const t = S.tracks[st.cur], sug = H.suggested(t).slice(0, 6), sc = S.data.scores;
+  return `
+    <div class="kicker"><span contenteditable data-f="${t.family}" spellcheck="false">${S.esc(H.familyName(t.family))}</span>${H.isSplit(t.family) ? ` › <span contenteditable data-c="${t.cluster}" spellcheck="false">${S.esc(H.leafName(t.cluster))}</span>` : ''}</div>
+    <h2 style="margin-top:6px">${S.esc(t.title)}</h2><div class="muted">${S.esc(t.artist)}${t.album ? ' · ' + S.esc(t.album) : ''}</div>
+    <div class="facts"><span>${t.bpm ?? '—'} BPM</span><span>${t.key ?? '—'}</span><span>${S.fmtDur(t.dur)}</span><span>${S.esc((t.ext || '').toUpperCase())}</span></div>
+    <div class="actions"><button class="primary" data-act="playtrack">${t_(H.player.current === t.i && H.player.playing ? 'pause' : 'play')}</button>${S.heart(t.i)}</div>
+    <h3>${t_('tags')}</h3>${t.confirmed.length ? t.confirmed.map(g => S.chip(g, { removable: true, i: t.i })).join('') : `<span class="muted">${t_('untagged')}</span>`}
+    <h3>${t_('suggested')}</h3>${sug.length ? sug.map(g => S.chip(g, { suggested: true, score: sc[g][t.i], i: t.i })).join('') : `<span class="muted">${t_('nothingAbove')}</span>`}
+    <h3>${t_('styles')}</h3>${t.styles.map(([s, v]) => `<div class="meter"><span>${S.esc(s)}</span><div class="track"><b style="width:${Math.min(100, v * 100)}%"></b></div></div>`).join('')}
+    <h3>${t_('soundsLike')}</h3>${st.nbrs.map(j => trackRow(j, 'nbrs')).join('')}`;
+}
+
+function selectionHTML() {
+  if (!st.sel.length) return `<div class="empty">${t_('lassoOrSearch')}</div>`;
+  const sc = S.data.scores, names = S.data.tags.map(g => g.name), avg = {};
+  names.forEach(g => (avg[g] = st.sel.reduce((a, j) => a + (sc[g] ? sc[g][j] : 0), 0) / st.sel.length));
+  const top = names.sort((a, b) => avg[b] - avg[a]).slice(0, 6);
+  const cl = {}; st.sel.forEach(j => (cl[S.tracks[j].cluster] = (cl[S.tracks[j].cluster] || 0) + 1));
+  const untagged = st.sel.filter(j => !S.tracks[j].confirmed.length).length;
+  const bpms = st.sel.map(j => S.tracks[j].bpm).filter(Boolean).sort((a, b) => a - b);
+  return `
+    <div class="kicker">${S.esc(selLabel())}</div>
+    <div class="stats" style="margin-top:8px"><div class="stat"><b>${st.sel.length}</b><span>${t_('tracks')}</span></div><div class="stat warn"><b>${untagged}</b><span>${t_('untagged')}</span></div>
+      ${bpms.length ? `<div class="stat"><b>${bpms[Math.floor(bpms.length * 0.1)]}–${bpms[Math.floor(bpms.length * 0.9)]}</b><span>BPM</span></div>` : ''}</div>
+    <div class="actions"><button class="primary" data-act="save">${t_('savePlaylist')}</button><button data-act="vibe">${t_('teachVibe')}</button><button class="ghost" data-act="clear">${t_('clear')}</button></div>
+    <h3>${t_('commonTags')}</h3>${top.map(g => `<span class="chip sugg" style="--c:${H.UI.suggested}"><i></i>${S.esc(g)}<span class="score">${Math.round(avg[g] * 100)}</span><button data-act="tagall" data-tag="${S.esc(g)}" title="${t_('tagAllN', { n: st.sel.length })}">${t_('all')}</button></span>`).join('')}
+    <h3>${t_('clusters')}</h3>${Object.entries(cl).sort((a, b) => b[1] - a[1]).map(([c, n]) => `<div class="meter"><span>${S.esc(H.clusterName(+c))}</span><div class="track"><b style="width:${(n / st.sel.length) * 100}%;--c:${S.col(+c)}"></b></div></div>`).join('')}
+    <h3>${t_('tracks')}</h3>${st.sel.slice(0, 60).map(j => trackRow(j, 'sel')).join('')}${st.sel.length > 60 ? `<div class="muted small" style="padding:6px">${t_('andMore', { n: st.sel.length - 60 })}</div>` : ''}`;
+}
+
+function playlistsHTML() {
+  const pls = S.data.playlists;
+  return `${pls.length ? pls.map(p => `<div class="pl"><span class="grow">${S.esc(p.name)} <span class="muted small">· ${t_('nTracks', { n: p.ids.length })}${p.kind === 'flow' ? t_('flowKind') : ''}</span></span>
+      <button class="small ghost" data-act="showpl" data-id="${p.id}">${t_('show')}</button><button class="small danger" data-act="delpl" data-id="${p.id}">×</button></div>`).join('') : `<div class="empty">${t_('noPlaylists')}</div>`}
+    <div class="actions"><button class="primary" data-act="export" ${pls.length || S.data.liked.length ? '' : 'disabled'}>${t_('exportRb')}</button></div>
+    <p class="hint">${t_('exportHint')}</p>`;
+}
+
+function likedHTML() {
+  const ids = H.likedList();
+  if (!ids.length) return `<div class="empty">${t_('noLiked')}</div>`;
+  const dur = ids.reduce((a, j) => a + S.tracks[j].dur, 0);
+  return `<div class="stats"><div class="stat"><b>${ids.length}</b><span>${t_('liked')}</span></div><div class="stat"><b>${S.fmtDur(dur)}</b><span>${t_('length')}</span></div></div>
+    <div class="actions"><button class="primary" data-act="playliked">${t_('playAll')}</button><button data-act="saveliked">${t_('savePlaylist')}</button></div>
+    <h3>${t_('recentFirst')}</h3>${ids.map(j => trackRow(j, 'liked')).join('')}`;
+}
+
+function clearSel() { st.sel = []; st.selKind = ''; S.focus(map, null); if (st.tab === 'selection') setTab('selection'); else document.getElementById('selN').textContent = 0; }
+
+body.addEventListener('click', async e => {
+  const el = e.target.closest('[data-act]'); if (!el) return;
+  const a = el.dataset.act, i = +el.dataset.i, tag = el.dataset.tag;
+  try {
+    if (a === 'open') {
+      const list = el.dataset.list;
+      const q = list === 'sel' ? st.sel : list === 'liked' ? H.likedList() : st.nbrs;
+      const label = list === 'sel' ? selLabel() : list === 'liked' ? t_('liked') : similar(st.cur);
+      if (list === 'sel' || list === 'liked') await showTrack(i);
+      H.player.play(i, { queue: q, label });
+      return;
+    }
+    if (a === 'playtrack') {
+      if (H.player.current === st.cur) H.player.toggle();
+      else H.player.play(st.cur, { queue: [st.cur, ...st.nbrs], label: similar(st.cur) });
+    }
+    if (a === 'playliked') { const q = H.likedList(); H.player.play(q[0], { queue: q, label: t_('liked') }); return; }
+    if (a === 'saveliked') { const n = prompt(t_('playlistName'), t_('liked')); if (n) { await H.createPlaylist(n, H.likedList()); S.toast(t_('saved', { x: n })); } }
+    if (a === 'accept') await H.setTag([i], tag, 'confirmed');
+    if (a === 'reject') await H.setTag([i], tag, 'rejected');
+    if (a === 'remove') await H.setTag([i], tag, 'clear');
+    if (a === 'tagall') { const r = await H.setTag(st.sel, tag, 'confirmed'); S.toast(t_('taggedN', { n: st.sel.length, x: tag }) + (r.trained ? t_('retrained') : '')); }
+    if (a === 'save') { const n = prompt(t_('playlistName'), st.selKind === 'search' ? st.selName : t_('newPlaylist')); if (n) { await H.createPlaylist(n, st.sel); S.toast(t_('saved', { x: n })); } }
+    if (a === 'vibe') { const n = prompt(t_('vibePrompt'), ''); if (n) { await H.newVibe(n, st.sel); S.toast(t_('vibeTrained', { x: n, n: st.sel.length })); } }
+    if (a === 'clear') { clearSel(); return; }
+    if (a === 'showpl') { const p = S.data.playlists.find(p => p.id === +el.dataset.id); st.sel = p.ids.map(id => S.data.byId[id]).filter(x => x != null); st.selKind = 'playlist'; st.selName = p.name; S.focus(map, st.sel); setTab('selection'); return; }
+    if (a === 'delpl') { const p = S.data.playlists.find(p => p.id === +el.dataset.id); if (confirm(t_('deletePl', { x: p.name }))) await H.deletePlaylist(p.id); }
+    if (a === 'export') { const r = await H.exportAll(); S.toast(t_('exported', { p: r.playlists, n: r.tracks })); return; }
+  } catch (err) { S.toast(err.message); }
+  setTab(st.tab);
+});
+body.addEventListener('focusout', async e => {
+  const { c, f } = e.target.dataset; if (c == null && f == null) return;
+  const name = e.target.textContent.trim(); if (!name) return;
+  if (f != null) { await H.renameFamily(+f, name); S.toast(t_('familyRenamed')); } else { await H.renameCluster(+c, name); S.toast(t_('groupRenamed')); }
+});
+body.addEventListener('keydown', e => { if ((e.target.dataset.c != null || e.target.dataset.f != null) && e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
+document.getElementById('tabs').onclick = e => { const b = e.target.closest('button'); if (b) setTab(b.dataset.v); };
+
+H.on('space', async s => { S.setSpace(map, s); if (st.cur != null) { st.nbrs = await H.neighbors(st.cur, 10); S.highlight(map, [st.cur, ...st.nbrs], s); } setTab(st.tab); });
+H.on('color', m => S.setColor(map, m));
+H.on('tags', () => { if (H.color !== 'cluster') S.setColor(map, H.color); if (st.tab !== 'playlists') setTab(st.tab); });
+H.on('clusters', () => S.relabel(map));
+H.on('playlists', () => { if (st.tab === 'playlists') setTab('playlists'); else document.getElementById('plN').textContent = S.data.playlists.length; });
+H.on('search', (res, q) => {
+  if (H.mode !== 'map') return;
+  if (!res) { clearSel(); return; }
+  st.sel = res; st.selKind = 'search'; st.selName = q; S.focus(map, st.sel); setTab('selection');
+});
+H.on('player', i => {
+  document.querySelectorAll('.row[data-i]').forEach(r => r.classList.toggle('playing', +r.dataset.i === i));
+  playButton();
+});
+function playButton() {
+  const b = body.querySelector('[data-act="playtrack"]');
+  if (b) b.textContent = t_(H.player.current === st.cur && H.player.playing ? 'pause' : 'play');
+}
+H.on('playstate', playButton);
+H.on('likes', () => { document.getElementById('likeN').textContent = S.data.liked.length; if (st.tab === 'liked') setTab('liked'); });
+H.on('lang', () => setTab(st.tab));
+</script>
+</body>
+</html>

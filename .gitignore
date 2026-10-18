@@ -1,0 +1,6 @@
+data/
+.venv/
+__pycache__/
+*.pyc
+models/
+mockups/library.json

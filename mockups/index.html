@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Summit Mockups</title>
+<link rel="stylesheet" href="shared.css">
+<style>
+  /* layout only: components come from shared.css */
+  body { padding: 40px 16px; overflow: auto; }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  h1 { font: 700 30px var(--display); letter-spacing: .06em; margin: 0 0 4px; text-transform: uppercase; text-shadow: 0 0 18px rgba(25,227,255,.35); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; margin-top: 24px; }
+  .opt .k { color: var(--pink); font: 700 13px var(--display); letter-spacing: .12em; text-shadow: var(--glow-pink); }
+  .opt h2 { margin: 6px 0 8px; }
+  .opt p { color: var(--muted); margin: 0 0 10px; }
+  .opt ul { margin: 0; padding-left: 18px; color: #d9e4ea; }
+  .qs { margin-top: 30px; }
+  .qs li { margin: 6px 0; color: #d9e4ea; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="brand" href="index.html">summit</a>
+  <h1 style="margin-top:14px">UI mockups</h1>
+  <p class="muted">All three use <b>your real tracks and audio</b> (when launched with <code>uv run mockups/app.py</code>). The 12 clusters, tags, BPMs and keys are fake assignments. Space plays/pauses, ⇧← / ⇧→ go to previous/next, ⌥+hover auditions. <kbd>ctrl</kbd>+<kbd>alt</kbd>+<kbd>shift</kbd>+<kbd>D</kbd> toggles help tips. The CLAP / EffNet / Combined toggle shows deliberately different layouts: CLAP is blurrier, EffNet more separated.</p>
+  <div class="grid">
+    <a class="opt card" href="a-map-panel.html"><div class="k">A</div><h2>Map + side panel</h2>
+      <p>The map is the main view. A side panel shows whatever you clicked, lassoed or searched.</p>
+      <ul><li>Track detail, tags, Discogs styles, neighbours</li><li>Selection tab: tag all, save playlist, teach a vibe</li><li>Editable cluster names</li></ul></a>
+    <a class="opt card" href="b-workbench.html"><div class="k">B</div><h2>Tagging workbench</h2>
+      <p>A map plus a rekordbox-style track table, built for tagging the untagged library in bulk.</p>
+      <ul><li>Tag vocabulary sidebar with confirmed/suggested counts</li><li>Lasso fills the table; untagged-only filter</li><li>Checkbox bulk confirm / add tag</li></ul></a>
+    <a class="opt card" href="c-set-builder.html"><div class="k">C</div><h2>Flow builder</h2>
+      <p>Click to place stages; a corridor around the route pulls in tracks. The bottom panel shows the set as a colour-coded timeline and a play-order list.</p>
+      <ul><li>Insert, drag or delete stages; ⌘Z / ⇧⌘Z</li><li>Radius + target length</li><li>Play the flow straight through</li></ul></a>
+  </div>
+  <div class="qs card"><h3 style="margin-top:0">Questions to answer while clicking around</h3><ol>
+    <li>Which should be the <b>home</b> view? These could all be modes of one app (e.g. Map / Tag / Build tabs).</li>
+    <li>Tagging: is it per-track in a panel (A), bulk in a table (B), or both?</li>
+    <li>Flow builder: does stage placement feel right? Should radius be adjustable per stage?</li>
+    <li>Playback: click plays, ⌥+hover auditions from 40% in. Right split?</li>
+    <li>What do you colour by most: cluster, tagged-ness, BPM or a tag score?</li>
+    <li>Are cluster labels on the map useful, or clutter?</li>
+  </ol></div>
+</div>
+</body>
+</html>

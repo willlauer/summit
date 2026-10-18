@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Summit · A: Map + panel</title>
+<link rel="stylesheet" href="shared.css">
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+<script src="shared.js"></script>
+<style>
+  /* layout only: components come from shared.css */
+  body { display: grid; grid-template-rows: auto 1fr auto; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 4px var(--panel-w, 380px); min-height: 0; }
+  #map { min-height: 0; min-width: 0; overflow: hidden; }
+  .panel { display: flex; flex-direction: column; min-height: 0; }
+  .body { padding: 14px 16px; overflow: auto; flex: 1; }
+  .pl { display: flex; justify-content: space-between; align-items: center; padding: 8px 6px; border-bottom: 1px solid var(--line); }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">summit</a>
+  <div class="seg" id="space"><button data-v="clap">CLAP</button><button data-v="effnet" class="on">EffNet</button><button data-v="combined">Combined</button></div>
+  <label class="ctl">Color <select id="color"></select></label>
+  <div class="search"><input id="q" placeholder="Search a vibe: “rainy late night”, “acid peak”, “warm piano”…"></div>
+  <span class="help muted small">Drag to pan · scroll to zoom · <kbd>ctrl</kbd>+drag to lasso (<kbd>⇧</kbd> adds) · <kbd>esc</kbd> clears</span>
+</header>
+<main>
+  <div id="map" class="mapbg"></div>
+  <div class="split-x" id="splitPanel"></div>
+  <aside class="panel surface" id="panel">
+    <div class="tabs" id="tabs">
+      <button data-v="track" class="on">Track</button>
+      <button data-v="selection">Selection <span class="n" id="selN">0</span></button>
+      <button data-v="playlists">Playlists <span class="n" id="plN">2</span></button>
+    </div>
+    <div class="body" id="body"></div>
+  </aside>
+</main>
+<footer id="player"></footer>
+<div class="note help" id="note"><button onclick="this.parentNode.remove()">×</button><b>A: Map + side panel.</b> Click a dot to play it and see details. <kbd>⌥</kbd>+hover to audition. Rows in the panel play in order, so next/previous follow the list. Ctrl+drag to lasso a region. Drag the divider to resize the panel. Type a vibe in search and press Enter.</div>
+
+<script>
+const st = { space: 'effnet', color: 'cluster', tab: 'track', cur: null, sel: [], selLabel: '', playlists: [
+  { name: 'Sunday warm-up', idxs: S.neighbors(300, 24, 'effnet') },
+  { name: 'Dark 4am', idxs: S.neighbors(2600, 31, 'effnet') },
+]};
+const map = document.getElementById('map'), body = document.getElementById('body');
+
+const colorSel = document.getElementById('color');
+colorSel.innerHTML = `<option value="cluster">Cluster</option><option value="bpm">BPM</option><option value="tagged">Tagged vs untagged</option>
+  <optgroup label="Tag score">${S.ALL_TAGS.map(t => `<option value="tag:${t}">${t}</option>`).join('')}</optgroup>`;
+
+S.plot(map, { space: st.space, colorMode: st.color, getSpace: () => st.space }).then(() => {
+  map.on('plotly_hover', e => { const p = e.points.find(p => p.curveNumber === 0); if (p && e.event && e.event.altKey) S.player.audition(p.pointIndex); });
+  map.on('plotly_click', e => {
+    const p = e.points.find(p => p.curveNumber === 0); if (!p) return;
+    const i = p.pointIndex; showTrack(i);
+    S.player.play(i, { queue: [i, ...S.neighbors(i, 10, st.space)], label: 'Similar to ' + S.tracks[i].title });
+  });
+  S.ctrlLasso(map, () => st.space, (idxs, add) => {
+    st.sel = add && st.selLabel === 'Lasso selection' ? [...new Set([...st.sel, ...idxs])] : idxs;
+    st.selLabel = 'Lasso selection'; S.focus(map, st.sel); setTab('selection');
+  }, clearSel);
+  S.splitter(document.getElementById('splitPanel'), { target: document.getElementById('panel'), cssVar: '--panel-w', sign: -1, min: 280, max: 900, key: 'summit.a.panel', onResize: () => Plotly.Plots.resize(map) });
+  showTrack(410);
+});
+
+function showTrack(i) {
+  st.cur = i;
+  S.highlight(map, [i, ...S.neighbors(i, 10, st.space)], st.space);
+  setTab('track');
+}
+
+function setTab(t) {
+  st.tab = t;
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === t));
+  document.getElementById('selN').textContent = st.sel.length;
+  document.getElementById('plN').textContent = st.playlists.length;
+  body.innerHTML = t === 'track' ? trackHTML() : t === 'selection' ? selectionHTML() : playlistsHTML();
+}
+
+function trackRow(j, list) {
+  const t = S.tracks[j];
+  return `<div class="row${S.player.current === j ? ' playing' : ''}" data-act="open" data-list="${list}" data-i="${j}"><span class="dot" style="--c:${S.PALETTE[t.cluster]}"></span>
+    <span class="grow">${S.esc(t.title)} <span class="muted">· ${S.esc(t.artist)}</span></span><span class="muted small">${t.bpm}</span></div>`;
+}
+
+function trackHTML() {
+  if (st.cur == null) return '<div class="empty">Click a dot on the map.</div>';
+  const t = S.tracks[st.cur], sug = S.suggested(t).slice(0, 6);
+  return `
+    <div class="kicker">Cluster · <span contenteditable data-c="${t.cluster}">${S.esc(S.CLUSTERS[t.cluster].name)}</span></div>
+    <h2>${S.esc(t.title)}</h2><div class="muted">${S.esc(t.artist)}</div>
+    <div class="facts"><span>${t.bpm} BPM</span><span>${t.key}</span><span>${S.fmtDur(t.dur)}</span></div>
+    <h3>Tags</h3>${t.confirmed.length ? t.confirmed.map(g => S.chip(g, { removable: true, i: t.i })).join('') : '<span class="muted">Untagged</span>'}
+    <h3>Suggested</h3>${sug.length ? sug.map(g => S.chip(g, { suggested: true, score: t.scores[g], i: t.i })).join('') : '<span class="muted">No suggestions above threshold</span>'}
+    <h3>Discogs styles</h3>${t.styles.map(([s, v]) => `<div class="meter"><span>${s}</span><div class="track"><b style="width:${v * 100}%"></b></div></div>`).join('')}
+    <h3>Sounds like</h3>${S.neighbors(t.i, 10, st.space).map(j => trackRow(j, 'nbrs')).join('')}`;
+}
+
+function selectionHTML() {
+  if (!st.sel.length) return '<div class="empty">Lasso a region or run a search.</div>';
+  const avg = {}; S.ALL_TAGS.forEach(g => avg[g] = st.sel.reduce((a, j) => a + S.tracks[j].scores[g], 0) / st.sel.length);
+  const top = [...S.ALL_TAGS].sort((a, b) => avg[b] - avg[a]).slice(0, 5);
+  const cl = {}; st.sel.forEach(j => cl[S.tracks[j].cluster] = (cl[S.tracks[j].cluster] || 0) + 1);
+  const untagged = st.sel.filter(j => !S.tracks[j].confirmed.length).length;
+  return `
+    <div class="kicker">${S.esc(st.selLabel)}</div><h2>${st.sel.length} tracks</h2>
+    <div class="muted">${untagged} untagged</div>
+    <div class="actions"><button class="primary" data-act="save">Save as playlist</button><button data-act="vibe">Teach a vibe…</button><button data-act="clear">Clear</button></div>
+    <h3>Common tags: apply to all</h3>${top.map(g => `<span class="chip sugg" style="--c:${S.UI.suggested}"><i></i>${g}<span class="score">${Math.round(avg[g] * 100)}</span><button data-act="tagall" data-tag="${g}" title="Tag all ${st.sel.length}">✓ all</button></span>`).join('')}
+    <h3>Clusters</h3>${Object.entries(cl).sort((a, b) => b[1] - a[1]).map(([c, n]) => `<div class="meter"><span>${S.CLUSTERS[c].name}</span><div class="track"><b style="width:${n / st.sel.length * 100}%;--c:${S.PALETTE[c]}"></b></div></div>`).join('')}
+    <h3>Tracks</h3>${st.sel.slice(0, 40).map(j => trackRow(j, 'sel')).join('')}${st.sel.length > 40 ? `<div class="muted small">…and ${st.sel.length - 40} more</div>` : ''}`;
+}
+
+function playlistsHTML() {
+  return `${st.playlists.map((p, k) => `<div class="pl"><div><b>${S.esc(p.name)}</b><div class="muted small">${p.idxs.length} tracks</div></div><button data-act="showpl" data-k="${k}">Show on map</button></div>`).join('')}
+    <div class="actions" style="margin-top:16px"><button class="primary" data-act="export">Export to rekordbox (XML + m3u8)</button></div>
+    <p class="muted small">Writes data/exports/summit.xml with a <code>summit/</code> folder, plus one .m3u8 per playlist.</p>`;
+}
+
+body.addEventListener('click', e => {
+  const el = e.target.closest('[data-act]'); if (!el) return;
+  const a = el.dataset.act, i = +el.dataset.i, tag = el.dataset.tag;
+  if (a === 'open') {
+    const q = el.dataset.list === 'sel' ? st.sel : S.neighbors(st.cur, 10, st.space), label = el.dataset.list === 'sel' ? st.selLabel : 'Similar to ' + S.tracks[st.cur].title;
+    if (el.dataset.list === 'nbrs') S.player.play(i, { queue: q, label }); else { showTrack(i); S.player.play(i, { queue: q, label }); }
+    return;
+  }
+  if (a === 'accept') { S.tracks[i].confirmed.push(tag); S.toast(`Tagged “${tag}”`); }
+  if (a === 'reject') S.tracks[i].rejected.push(tag);
+  if (a === 'remove') S.tracks[i].confirmed = S.tracks[i].confirmed.filter(g => g !== tag);
+  if (a === 'tagall') { st.sel.forEach(j => S.tracks[j].confirmed.includes(tag) || S.tracks[j].confirmed.push(tag)); S.toast(`Tagged ${st.sel.length} tracks “${tag}”`); }
+  if (a === 'save') { const n = prompt('Playlist name', 'New vibe'); if (n) { st.playlists.push({ name: n, idxs: st.sel }); S.toast(`Saved “${n}”`); } }
+  if (a === 'vibe') { const n = prompt('Name this vibe (becomes a tag + classifier)', 'rolling hypnotic'); if (n) S.toast(`Vibe “${n}” created from ${st.sel.length} examples (mock)`); }
+  if (a === 'clear') clearSel();
+  if (a === 'showpl') { st.sel = st.playlists[+el.dataset.k].idxs; st.selLabel = st.playlists[+el.dataset.k].name; S.focus(map, st.sel); setTab('selection'); return; }
+  if (a === 'export') { S.toast(`Exported ${st.playlists.length} playlists → summit.xml (mock)`); return; }
+  if (st.color === 'tagged' || st.color.startsWith('tag:')) S.setColor(map, st.color);
+  setTab(st.tab);
+});
+S.player.onChange(i => document.querySelectorAll('.row[data-i], tr[data-i]').forEach(r => r.classList.toggle('playing', +r.dataset.i === i)));
+body.addEventListener('focusout', e => {
+  if (e.target.dataset.c == null) return;
+  S.CLUSTERS[+e.target.dataset.c].name = e.target.textContent.trim(); S.relabel(map, st.space); S.toast('Cluster renamed');
+});
+
+document.getElementById('tabs').onclick = e => { const b = e.target.closest('button'); if (b) setTab(b.dataset.v); };
+document.getElementById('space').onclick = e => {
+  const b = e.target.closest('button'); if (!b) return;
+  st.space = b.dataset.v; document.querySelectorAll('#space button').forEach(x => x.classList.toggle('on', x === b));
+  S.setSpace(map, st.space); if (st.cur != null) S.highlight(map, [st.cur, ...S.neighbors(st.cur, 10, st.space)], st.space);
+};
+colorSel.onchange = () => { st.color = colorSel.value; S.setColor(map, st.color); };
+function clearSel() { st.sel = []; st.selLabel = ''; S.focus(map, null); if (st.tab === 'selection') setTab('selection'); else document.getElementById('selN').textContent = 0; }
+document.getElementById('q').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const q = e.target.value.trim();
+  if (!q) { clearSel(); return; }
+  st.sel = S.search(q).map(r => r.i); st.selLabel = `Search: “${q}”`;
+  S.focus(map, st.sel); setTab('selection');
+});
+</script>
+</body>
+</html>

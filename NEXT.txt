@@ -1,0 +1,7 @@
+The waveform sometimes looks different / messed up. Maybe needs to be a separate view or something.
+
+No way to create playlists / add to playlists?
+
+No back button / easy way to navigate back.
+
+double-click to "go-to" song (as long as is back button)

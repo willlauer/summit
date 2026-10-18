@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Summit · B: Tagging workbench</title>
+<link rel="stylesheet" href="shared.css">
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+<script src="shared.js"></script>
+<style>
+  /* layout only: components come from shared.css */
+  body { display: grid; grid-template-rows: auto 1fr auto; }
+  main { display: grid; grid-template-columns: var(--side-w, 240px) 4px minmax(0, 1fr); min-height: 0; }
+  .side { overflow: auto; padding: 4px 12px 16px; }
+  .side h3 { margin-top: 14px; }
+  .work { display: grid; grid-template-rows: var(--map-h, 45vh) 4px auto 1fr; min-height: 0; min-width: 0; }
+  #map { min-height: 0; min-width: 0; overflow: hidden; }
+  .tbar { padding: 8px 12px; border-bottom: 1px solid var(--line); }
+  .bulk { display: none; gap: 6px; align-items: center; padding-left: 10px; border-left: 1px solid var(--line); }
+  .bulk.on { display: inline-flex; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">summit</a>
+  <div class="seg" id="space"><button data-v="clap">CLAP</button><button data-v="effnet" class="on">EffNet</button><button data-v="combined">Combined</button></div>
+  <label class="ctl">Color <select id="color"></select></label>
+  <div class="search"><input id="q" placeholder="Search a vibe or artist/title…"></div>
+  <span class="help muted small">Drag to pan · <kbd>ctrl</kbd>+drag to lasso (<kbd>⇧</kbd> adds) · <kbd>esc</kbd> clears</span>
+</header>
+<main>
+  <nav class="side surface" id="side"></nav>
+  <div class="split-x" id="splitSide"></div>
+  <section class="work">
+    <div id="map" class="mapbg"></div>
+    <div class="split-y" id="splitMap"></div>
+    <div class="tbar toolbar surface">
+      <span id="scope" class="pill">All tracks</span>
+      <span id="count" class="muted"></span>
+      <label><input type="checkbox" id="untagged"> Untagged only</label>
+      <span class="grow"></span>
+      <span class="bulk" id="bulk">
+        <span id="nchk"></span>
+        <button class="primary" data-act="confirmtop">Confirm top suggestion</button>
+        <select id="addtag"><option value="">Add tag…</option></select>
+        <button data-act="save">Save as playlist</button>
+      </span>
+    </div>
+    <div class="tablewrap"><table>
+      <thead><tr><th class="bar"></th><th><input type="checkbox" id="chkall"></th><th></th><th>Title</th><th>Artist</th><th>BPM</th><th>Key</th><th>Cluster</th><th>Tags</th><th>Suggested</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+  </section>
+</main>
+<footer id="player"></footer>
+<div class="note help"><button onclick="this.parentNode.remove()">×</button><b>B: Tagging workbench.</b> Click ▶ or a dot to play; next/previous follow the table order. The map starts coloured tagged (lime) vs untagged. Ctrl+drag to lasso a region; it fills the table. Drag the dividers to resize the sidebar and the map/table split. Click a tag on the left to see its strongest candidates. Check rows to bulk-confirm.</div>
+
+<script>
+const st = { space: 'effnet', color: 'tagged', scope: null, scopeLabel: 'All tracks', tag: null, untagged: false, checked: new Set(), playlists: ['Sunday warm-up', 'Dark 4am'] };
+const map = document.getElementById('map');
+const colorSel = document.getElementById('color');
+colorSel.innerHTML = `<option value="tagged">Tagged vs untagged</option><option value="cluster">Cluster</option><option value="bpm">BPM</option>
+  <optgroup label="Tag score">${S.ALL_TAGS.map(t => `<option value="tag:${t}">${t}</option>`).join('')}</optgroup>`;
+document.getElementById('addtag').innerHTML += S.ALL_TAGS.map(t => `<option>${t}</option>`).join('');
+
+function renderSide() {
+  let h = '';
+  for (const [cat, tags] of Object.entries(S.TAGS)) {
+    h += `<h3>${cat}</h3>`;
+    for (const g of tags) {
+      const conf = S.tracks.filter(t => t.confirmed.includes(g)).length;
+      const sug = S.tracks.filter(t => !t.confirmed.includes(g) && !t.rejected.includes(g) && t.scores[g] > 0.6).length;
+      h += `<div class="tagrow ${st.tag === g ? 'on' : ''}" data-tag="${g}"><span class="dot" style="--c:${S.UI.confirmed}"></span><span class="grow">${g}</span><span class="cnt"><b>${conf}</b> · ${sug}?</span></div>`;
+    }
+  }
+  h += `<h3>Playlists</h3>${st.playlists.map(p => `<div class="tagrow"><span class="grow">${S.esc(p)}</span></div>`).join('')}
+    <div style="margin-top:10px"><button onclick="S.toast('Exported to summit.xml + m3u8 (mock)')">Export to rekordbox</button></div>
+    <p class="muted small" style="margin-top:14px"><b style="color:var(--accent)">gold</b> = confirmed · grey = suggested by Summit</p>`;
+  document.getElementById('side').innerHTML = h;
+}
+
+function visible() {
+  let idx = st.scope ?? S.tracks.map(t => t.i);
+  if (st.tag) idx = idx.filter(j => S.tracks[j].confirmed.includes(st.tag) || S.tracks[j].scores[st.tag] > 0.6).sort((a, b) => S.tracks[b].scores[st.tag] - S.tracks[a].scores[st.tag]);
+  if (st.untagged) idx = idx.filter(j => !S.tracks[j].confirmed.length);
+  return idx;
+}
+
+function renderTable() {
+  const idx = visible(), shown = idx.slice(0, 300);
+  document.getElementById('scope').textContent = st.tag ? `${st.scopeLabel} · tag: ${st.tag}` : st.scopeLabel;
+  document.getElementById('count').textContent = `${idx.length.toLocaleString()} tracks${idx.length > 300 ? ' (showing 300)' : ''}`;
+  document.getElementById('rows').innerHTML = shown.map(j => {
+    const t = S.tracks[j], sug = S.suggested(t).slice(0, 3);
+    return `<tr data-i="${j}" class="${st.checked.has(j) ? 'checked' : ''} ${S.player.current === j ? 'playing' : ''}">
+      <td class="bar" style="--c:${S.PALETTE[t.cluster]}"></td>
+      <td><input type="checkbox" data-chk="${j}" ${st.checked.has(j) ? 'checked' : ''}></td>
+      <td><button class="play" data-play="${j}">▶</button></td>
+      <td>${S.esc(t.title)}</td><td class="muted">${S.esc(t.artist)}</td>
+      <td class="num">${t.bpm}</td><td class="num">${t.key}</td>
+      <td><span class="dot" style="--c:${S.PALETTE[t.cluster]};margin-right:7px"></span>${S.esc(S.CLUSTERS[t.cluster].name)}</td>
+      <td class="tags">${t.confirmed.map(g => S.chip(g, { removable: true, i: j })).join('')}</td>
+      <td class="tags">${sug.map(g => S.chip(g, { suggested: true, score: t.scores[g], i: j })).join('')}</td></tr>`;
+  }).join('');
+  const b = document.getElementById('bulk');
+  b.classList.toggle('on', st.checked.size > 0);
+  document.getElementById('nchk').textContent = `${st.checked.size} checked`;
+}
+
+function refresh() {
+  renderSide(); renderTable();
+  if (st.color === 'tagged' || st.color.startsWith('tag:')) S.setColor(map, st.color);
+}
+
+S.plot(map, { space: st.space, colorMode: st.color, getSpace: () => st.space }).then(() => {
+  map.on('plotly_hover', e => { const p = e.points.find(p => p.curveNumber === 0); if (p && e.event && e.event.altKey) S.player.audition(p.pointIndex); });
+  map.on('plotly_click', e => { const p = e.points.find(p => p.curveNumber === 0); if (p) S.player.play(p.pointIndex, { queue: visible(), label: st.scopeLabel }); });
+  S.ctrlLasso(map, () => st.space, (idxs, add) => {
+    st.scope = add && st.scope && st.scopeLabel === 'Lasso selection' ? [...new Set([...st.scope, ...idxs])] : idxs;
+    st.scopeLabel = 'Lasso selection'; S.focus(map, st.scope); st.checked.clear(); renderTable();
+  }, clearScope);
+  const resize = () => Plotly.Plots.resize(map);
+  S.splitter(document.getElementById('splitSide'), { target: document.getElementById('side'), cssVar: '--side-w', min: 180, max: 520, key: 'summit.b.side', onResize: resize });
+  S.splitter(document.getElementById('splitMap'), { target: map, cssVar: '--map-h', axis: 'y', min: 150, max: window.innerHeight - 220, key: 'summit.b.map', onResize: resize });
+  map.on('plotly_click', e => { const p = e.points.find(p => p.curveNumber === 0); if (!p) return; const tr = document.querySelector(`tr[data-i="${p.pointIndex}"]`); if (tr) tr.scrollIntoView({ block: 'center' }); });
+});
+refresh();
+
+document.getElementById('side').onclick = e => {
+  const r = e.target.closest('.tagrow[data-tag]'); if (!r) return;
+  st.tag = st.tag === r.dataset.tag ? null : r.dataset.tag;
+  st.color = st.tag ? 'tag:' + st.tag : 'tagged'; colorSel.value = st.color; S.setColor(map, st.color);
+  st.checked.clear(); refresh();
+};
+const rows = document.getElementById('rows');
+S.player.onChange(i => document.querySelectorAll('.row[data-i], tr[data-i]').forEach(r => r.classList.toggle('playing', +r.dataset.i === i)));
+rows.addEventListener('mouseover', e => { const tr = e.target.closest('tr'); if (tr) S.highlight(map, [+tr.dataset.i], st.space); });
+rows.addEventListener('click', e => {
+  const c = e.target.closest('[data-chk]'); if (c) { const j = +c.dataset.chk; c.checked ? st.checked.add(j) : st.checked.delete(j); renderTable(); return; }
+  const p = e.target.closest('[data-play]'); if (p) { S.player.play(+p.dataset.play, { queue: visible(), label: st.scopeLabel }); return; }
+  const a = e.target.closest('[data-act]'); if (!a) return;
+  const t = S.tracks[+a.dataset.i], tag = a.dataset.tag;
+  if (a.dataset.act === 'accept') t.confirmed.push(tag);
+  if (a.dataset.act === 'reject') t.rejected.push(tag);
+  if (a.dataset.act === 'remove') t.confirmed = t.confirmed.filter(g => g !== tag);
+  refresh();
+});
+document.getElementById('chkall').onchange = e => { st.checked = new Set(e.target.checked ? visible().slice(0, 300) : []); renderTable(); };
+document.getElementById('untagged').onchange = e => { st.untagged = e.target.checked; renderTable(); };
+document.getElementById('bulk').addEventListener('click', e => {
+  const a = e.target.closest('[data-act]'); if (!a) return;
+  if (a.dataset.act === 'confirmtop') {
+    let n = 0; st.checked.forEach(j => { const t = S.tracks[j], g = st.tag && !t.confirmed.includes(st.tag) ? st.tag : S.suggested(t)[0]; if (g) { t.confirmed.push(g); n++; } });
+    S.toast(`Confirmed tags on ${n} tracks`);
+  }
+  if (a.dataset.act === 'save') { const n = prompt('Playlist name', 'New playlist'); if (n) { st.playlists.push(n); S.toast(`Saved “${n}”`); } }
+  st.checked.clear(); refresh();
+});
+document.getElementById('addtag').onchange = e => {
+  const g = e.target.value; if (!g) return;
+  st.checked.forEach(j => S.tracks[j].confirmed.includes(g) || S.tracks[j].confirmed.push(g));
+  S.toast(`Tagged ${st.checked.size} tracks “${g}”`); e.target.value = ''; st.checked.clear(); refresh();
+};
+document.getElementById('space').onclick = e => {
+  const b = e.target.closest('button'); if (!b) return;
+  st.space = b.dataset.v; document.querySelectorAll('#space button').forEach(x => x.classList.toggle('on', x === b)); S.setSpace(map, st.space);
+};
+colorSel.onchange = () => { st.color = colorSel.value; S.setColor(map, st.color); };
+function clearScope() { st.scope = null; st.scopeLabel = 'All tracks'; S.focus(map, null); S.highlight(map, [], st.space); renderTable(); }
+document.getElementById('q').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const q = e.target.value.trim();
+  if (!q) { clearScope(); return; }
+  st.scope = S.search(q, 80).map(r => r.i); st.scopeLabel = `Search: “${q}”`;
+  S.focus(map, st.scope); st.checked.clear(); renderTable();
+});
+</script>
+</body>
+</html>
