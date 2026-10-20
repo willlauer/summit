@@ -53,6 +53,25 @@
     for (let j = 0; j < L.x.length; j++) { const e = (L.x[j] - x) ** 2 + (L.y[j] - y) ** 2; if (e < bd) { bd = e; best = j; } }
     return best;
   }
+  // Pixel look: a few bright stars per sub-cluster get a glint (spread out over its core by farthest-point sampling).
+  function glints(space) {
+    const L = layout(space); if (!L) return [];
+    const groups = {}; L.c.forEach((c, j) => (groups[c] = groups[c] || []).push(j));
+    const out = [];
+    for (const m of Object.values(groups)) {
+      if (m.length < 4) continue;
+      const cx = m.reduce((a, j) => a + L.x[j], 0) / m.length, cy = m.reduce((a, j) => a + L.y[j], 0) / m.length;
+      const core = m.slice().sort((a, b) => ((L.x[a] - cx) ** 2 + (L.y[a] - cy) ** 2) - ((L.x[b] - cx) ** 2 + (L.y[b] - cy) ** 2)).slice(0, Math.max(4, Math.floor(m.length * 0.8)));
+      const k = Math.max(3, Math.min(11, Math.floor(m.length / 14))), chosen = [core[0]], dmin = core.map(() => Infinity);
+      for (let s = 1; s < k; s++) {
+        const last = chosen[chosen.length - 1]; let best = 0;
+        core.forEach((j, q) => { dmin[q] = Math.min(dmin[q], (L.x[j] - L.x[last]) ** 2 + (L.y[j] - L.y[last]) ** 2); if (dmin[q] > dmin[best]) best = q; });
+        if (dmin[best] > 0) chosen.push(core[best]);
+      }
+      out.push(...chosen);
+    }
+    return out;
+  }
   const tooltip = i => { const t = d().tracks[i]; return `<b>${H.esc(t.title)}</b><br><span>${H.esc(t.artist)} · ${t.bpm ?? '—'} BPM · ${t.key ?? '—'}</span>`; };
 
   // ---- maps ----
@@ -70,6 +89,8 @@
         onHover: (i, info) => { if (i != null && info.event && info.event.altKey) H.player.audition(i); },
       });
       div._g = gx; div._flat = flat;
+      gx.setStyle(H.lookStyle());
+      gx.setGlints(glints(space));
       gx.setPositions(L.x, L.y, L.xyz);
       gx.setColors(colors(colorMode));
       gx.setLabels(labels(space));
@@ -83,6 +104,7 @@
   function setSpace(div, space) {
     const L = layout(space);
     g(div).setPositions(L.x, L.y, L.xyz);
+    g(div).setGlints(glints(space));
     g(div).setLabels(labels(space));
     g(div).fit();
   }
@@ -110,6 +132,8 @@
   H.on('player', markPlaying);
   H.on('playstate', markPlaying);
   H.on('labels', () => maps.forEach(m => m._g && relabel(m)));
+  // A new look: map style, cluster colours and labels follow; the page itself restyles through CSS.
+  H.on('look', () => maps.forEach(m => { if (!m._g) return; m._g.setStyle(H.lookStyle()); m._g.setColors(colors(H.color)); relabel(m); }));
   H.on('3d', on => maps.forEach(m => m._g && !m._flat && m._g.set3D(on)));
 
   // Ctrl-drag lasso on our own SVG overlay (macOS turns ctrl-click into a context menu). Tests screen positions, so it
@@ -185,12 +209,13 @@
   document.addEventListener('mousedown', () => H.emit('mousedown', document), true);
   document.addEventListener('click', e => H.likeClick(e), true);
   H.on('likes', i => document.querySelectorAll(`[data-like="${i}"]`).forEach(b => b.classList.toggle('on', d().tracks[i].liked)));
-  document.addEventListener('DOMContentLoaded', () => { H.applyHelp(document); H.applyLang(document); });
+  H.applyLook(document);
+  document.addEventListener('DOMContentLoaded', () => { H.applyHelp(document); H.applyLang(document); H.applyLook(document); });
 
   window.S = {
     H, DOT, col, layout, colors, labels, nearest, plot, setSpace, setColor, highlight, drawPath, markPlaying, setOpacity, focus, relabel,
     getRange, setRange, centerOn,
     toPx, toData, ctrlLasso, splitter, chip, heart: i => H.heart(i), esc: H.esc, fmtDur: H.fmtDur, toast: m => H.toast(m), player: H.player,
-    get tracks() { return d().tracks; }, get data() { return d(); }, ready: Promise.all([H.ready, galaxyReady]).then(([data]) => data),
+    get tracks() { return d().tracks; }, get data() { return d(); }, ready: H.ready,  // plot() itself waits for the renderer
   };
 })();

@@ -32,7 +32,7 @@ fun MiniPlayer() {
     val i = ps.current ?: return
     val t = lib.tracks[i]
     Column(
-        Modifier.padding(horizontal = 8.dp).fillMaxWidth().clip(PxBig).background(C.Raised2.copy(alpha = .94f)).border(1.dp, C.Line, PxBig).clickable { app.nowPlaying = true }
+        Modifier.padding(horizontal = 8.dp).fillMaxWidth().snowCap(1).clip(PxBig).background(C.Raised2.copy(alpha = .94f)).border(1.dp, C.Line, PxBig).clickable { app.nowPlaying = true }
             .pointerInput(Unit) { detectVerticalDragGestures { _, dy -> if (dy < -12) app.nowPlaying = true } },
     ) {
         Row(Modifier.padding(6.dp), verticalAlignment = Alignment.CenterVertically) {

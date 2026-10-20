@@ -9,6 +9,8 @@ import androidx.compose.runtime.remember
 import androidx.lifecycle.lifecycleScope
 import com.willlauer.summit.data.Status
 import com.willlauer.summit.ui.AppState
+import com.willlauer.summit.ui.LookState
+import com.willlauer.summit.ui.Looks
 import com.willlauer.summit.ui.SummitRoot
 import com.willlauer.summit.ui.SummitTheme
 import kotlinx.coroutines.launch
@@ -18,6 +20,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(0), navigationBarStyle = SystemBarStyle.dark(0))
         val app = application as SummitApp
+        LookState.set(Looks.byKey(app.repo.lookKey))
         setContent { SummitTheme { SummitRoot(remember { AppState(app.repo, app.player, app.scope) }) } }
     }
 

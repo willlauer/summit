@@ -1,13 +1,23 @@
 // Summit host (index.html): library data, player, shared state (space / colour / search), API calls,
 // global shortcuts and the help layer. Mode pages run in iframes and reach this as window.parent.Summit.
 (function () {
-  // Colour roles (DESIGN.md). Data palette is for cluster data only.
-  const PALETTE = ['#00f0ff', '#ff2a6d', '#05ffa1', '#b026ff', '#ff9a3d', '#5aa9ff', '#fcee0a', '#f45bff',
-                   '#3dffc5', '#ff5c5c', '#a8ff3d', '#ffb3d9', '#7d7dff', '#e2b45a', '#40c4aa', '#c9a6ff'];
+  // Looks: the whole app's style, switchable (the phone has the same two: android/…/ui/Theme.kt). Each sets the
+  // cluster palette and how maps draw; the rest is CSS (:root[data-look] in shared.css).
+  const LOOKS = {
+    classic: { label: 'Classic', pixel: false, wind: false,
+      palette: ['#00f0ff', '#ff2a6d', '#05ffa1', '#b026ff', '#ff9a3d', '#5aa9ff', '#fcee0a', '#f45bff',
+                '#3dffc5', '#ff5c5c', '#a8ff3d', '#ffb3d9', '#7d7dff', '#e2b45a', '#40c4aa', '#c9a6ff'] },
+    pixel: { label: 'Pixel', pixel: true, wind: true, top: '#071019', bottom: '#03070d',
+      palette: ['#7fdbff', '#4fa8ff', '#a9b8ff', '#7af2dc', '#c5a8ff', '#3fd0e0', '#e3f6ff', '#6f8cff',
+                '#9ffff0', '#5cc8ff', '#b4e2ff', '#8f7dff', '#49e3b8', '#d6c8ff', '#66b2d9', '#2fb8ff'] },
+  };
+  let look = 'classic';
+  try { look = LOOKS[localStorage.getItem('summit.look')] ? localStorage.getItem('summit.look') : 'classic'; } catch (e) {}
+  const PALETTE = LOOKS[look].palette.slice();  // cluster data only; swapped in place when the look changes
   const UI = { focus: '#ffffff', selected: '#ffd84d', confirmed: '#3dffb0', suggested: '#8b8fa4', untagged: '#2a3344', danger: '#ff4d8d' };
 
   const H = {
-    PALETTE, UI, data: null, space: 'combined', color: 'cluster', results: null, help: false, mode: 'map',
+    PALETTE, UI, LOOKS, look, data: null, space: 'combined', color: 'cluster', results: null, help: false, mode: 'map',
     listeners: {},
     on(ev, fn) { (this.listeners[ev] = this.listeners[ev] || []).push(fn); },
     off(ev, fn) { this.listeners[ev] = (this.listeners[ev] || []).filter(f => f !== fn); },
@@ -69,6 +79,18 @@
     return shades;
   };
   H.leafColor = c => palette().leaf[c] || PALETTE[0];
+  H.lookStyle = () => { const l = LOOKS[H.look]; return { pixel: l.pixel, wind: l.wind, top: l.top, bottom: l.bottom }; };
+  H.applyLook = doc => { if (doc && doc.documentElement) doc.documentElement.dataset.look = H.look; };
+  H.setLook = k => {
+    if (!LOOKS[k]) return;
+    H.look = k;
+    try { localStorage.setItem('summit.look', k); } catch (e) {}
+    PALETTE.splice(0, PALETTE.length, ...LOOKS[k].palette); shades = null;
+    H.applyLook(document);
+    document.querySelectorAll('iframe').forEach(f => { try { H.applyLook(f.contentDocument); } catch (e) {} });
+    H.emit('look', k);
+  };
+  H.applyLook(document);
   H.familyHue = f => PALETTE[f % PALETTE.length];  // "Family" colour mode: one distinct colour per family
   H.familyColor = f => palette().family[f] || PALETTE[0];
 
@@ -333,7 +355,7 @@
         <button data-p="next" title="${H.t('next')}" ${player.pos >= player.queue.length - 1 ? 'disabled' : ''}>⏭</button></div>
       <span class="eq"><i></i><i></i><i></i><i></i></span>
       ${H.heart(i)}<button class="addpl" data-p="addpl" title="${H.t('addToPl')}">＋</button>
-      <span class="part" style="--c:${col};background-image:url(/art/${t.id}?s=96)"></span>
+      <span class="part" style="--c:${col};background-image:url(/art/${t.id}?s=${LOOKS[H.look].pixel ? 21 : 96})"></span>
       <div class="pmeta" title="${H.t('goToTip')}"><b>${H.esc(t.title)}</b><span>${H.esc(t.artist)}</span></div>
       <span class="pfacts">${t.bpm ?? '—'} <small>BPM</small> · ${t.key ?? '—'} · ${H.esc((t.ext || '').toUpperCase())}</span>
       <div class="wave" data-p="seek" title="${H.t('seek')}"><div class="prog"></div></div>

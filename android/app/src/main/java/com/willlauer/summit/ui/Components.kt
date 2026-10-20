@@ -46,9 +46,11 @@ fun Art(i: Int, size: Dp, modifier: Modifier = Modifier, corner: Dp = 8.dp, @Sup
     Box(modifier.size(size).clip(if (corner >= 16.dp) PxBig else if (corner >= 8.dp) Px else PxSmall)
         .background(Brush.linearGradient(listOf(c.copy(alpha = .55f), Color(0xFF11111B), c.copy(alpha = .25f))))) {
         Icon(PI.Note, null, Modifier.align(Alignment.Center).size(size * 0.4f), tint = c.copy(alpha = .7f))
-        val cells = (size / P).toInt().coerceIn(16, 200)  // one source pixel per pixel unit, scaled up without smoothing
-        AsyncImage(model = app.repo.api.artUrl(lib.tracks[i].id, cells), contentDescription = null, contentScale = ContentScale.Crop,
-            filterQuality = androidx.compose.ui.graphics.FilterQuality.None, modifier = Modifier.fillMaxSize())
+        // Pixel look: one source pixel per pixel unit, scaled up without smoothing. Classic: sharp art.
+        val pixel = LookState.current.pixel
+        val px = if (pixel) (size / P).toInt().coerceIn(16, 200) else if (size > 120.dp) 768 else if (size > 50.dp) 256 else 128
+        AsyncImage(model = app.repo.api.artUrl(lib.tracks[i].id, px), contentDescription = null, contentScale = ContentScale.Crop,
+            filterQuality = if (pixel) androidx.compose.ui.graphics.FilterQuality.None else androidx.compose.ui.graphics.FilterQuality.Low, modifier = Modifier.fillMaxSize())
     }
 }
 
@@ -152,7 +154,7 @@ fun ActiveChip(modifier: Modifier = Modifier) {
     val active by app.repo.active.collectAsStateWithLifecycle()
     val p = pls.find { it.id == active }
     Row(
-        modifier.clip(Pill).background(if (p != null) C.Green.copy(alpha = .1f) else C.Raised)
+        modifier.snowCap(4, icicles = false, depth = 2).clip(Pill).background(if (p != null) C.Green.copy(alpha = .1f) else C.Raised)
             .border(1.dp, if (p != null) C.Green.copy(alpha = .35f) else C.Line, Pill)
             .clickable { app.sheet = Sheet.Active }.padding(horizontal = 12.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,

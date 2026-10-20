@@ -76,7 +76,7 @@ fun SummitRoot(app: AppState) {
 
 @Composable
 private fun BottomTabs(app: AppState) {
-    Row(Modifier.fillMaxWidth().navigationBarsPadding().height(62.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().snowCap(5, depth = 2).navigationBarsPadding().height(62.dp), verticalAlignment = Alignment.CenterVertically) {
         val items = listOf(Tab.Map to PI.Compass, Tab.Search to PI.Search, Tab.Library to PI.Library, Tab.Playlists to PI.Queue)
         items.forEach { (t, icon) ->
             val on = app.tab == t
@@ -140,7 +140,11 @@ fun SettingsScreen(bottomPad: androidx.compose.ui.unit.Dp) {
                 Text(when (val s = status) { Status.Ready -> "Connected"; Status.Loading -> "Connecting…"; is Status.Offline -> "Offline: ${s.message}"; is Status.Failed -> s.message },
                     style = MaterialTheme.typography.bodySmall, color = if (status == Status.Ready) C.Green else C.Muted)
             }
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(24.dp))
+            Text("Look", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            LookPicker()
+            Spacer(Modifier.height(24.dp))
             Text("Reach your Mac from anywhere with Tailscale: run `tailscale serve --bg 8766` on the Mac and use the https://….ts.net address it prints. "
                 + "Over USB during development, `adb reverse tcp:8766 tcp:8766` makes http://127.0.0.1:8766 work.", style = MaterialTheme.typography.bodySmall)
         }

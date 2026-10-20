@@ -29,7 +29,9 @@ fun SheetHost() {
     val sheet = app.sheet ?: return
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = sheet !is Sheet.Track)
     ModalBottomSheet(onDismissRequest = { app.sheet = null }, sheetState = state, containerColor = C.Raised, scrimColor = Color(0x9902060C), shape = PxBig,
-        dragHandle = { Box(Modifier.padding(vertical = 10.dp).size(40.dp, P * 2).background(C.Faint)) }) {
+        dragHandle = {  // a drift of snow along the top of the sheet, under the handle
+            Box(Modifier.fillMaxWidth().snowCap(3, inside = true), contentAlignment = Alignment.Center) { Box(Modifier.padding(vertical = 14.dp).size(40.dp, P * 2).background(C.Faint)) }
+        }) {
         Column(Modifier.navigationBarsPadding().padding(bottom = 8.dp)) {
             when (sheet) {
                 is Sheet.Track -> TrackSheet(sheet.i, sheet.playlistId)
@@ -148,6 +150,10 @@ private fun MapOptionsSheet() {
     val space by app.repo.space.collectAsStateWithLifecycle()
     val ui = LocalMapUi.current
     Column(Modifier.padding(horizontal = 24.dp)) {
+        Text("Look", style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(10.dp))
+        LookPicker()
+        Spacer(Modifier.height(20.dp))
         Text("Map", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(14.dp))
         Text("Arrange by", style = MaterialTheme.typography.labelLarge, color = C.Muted)
@@ -166,7 +172,7 @@ private fun MapOptionsSheet() {
             Switch(ui.labels, { ui.labels = it })
         }
         Spacer(Modifier.height(16.dp))
-        Text("Drag to move · pinch to zoom · tap a dot to see it · long-press a dot to add it to the playlist you're building. In 3D, drag to orbit and twist with two fingers.",
+        Text("Drag to move · pinch to zoom · tap a dot to see it · long-press a dot to add it to the playlist you're building. In 3D, twist with two fingers to turn and move them up / down to tilt.",
             style = MaterialTheme.typography.bodySmall)
         Spacer(Modifier.height(12.dp))
     }
@@ -215,4 +221,13 @@ private fun NameDialog(title: String, initial: String, confirm: String, onDone: 
         },
         confirmButton = { TextButton(onClick = { if (name.isNotBlank()) onDone(name.trim()) }, enabled = name.isNotBlank()) { Text(confirm) } },
         dismissButton = { TextButton(onClick = { app.dialog = null }) { Text("Cancel") } })
+}
+
+/** Switch the whole app between looks (Classic, Pixel). Remembered on this phone. */
+@Composable
+fun LookPicker() {
+    val app = LocalApp.current
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Looks.all.forEach { l -> Chip(l.label, LookState.current == l) { LookState.set(l); app.repo.lookKey = l.key } }
+    }
 }

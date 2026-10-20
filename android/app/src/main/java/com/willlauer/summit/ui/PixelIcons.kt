@@ -1,5 +1,7 @@
 package com.willlauer.summit.ui
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -7,12 +9,30 @@ import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.unit.dp
 
 /**
- * The app's icons, drawn on a 12×12 pixel grid ('#' = filled) so they share the pixel unit with everything else.
- * Built into ImageVectors, so they tint and size like any Material icon (24 dp = one grid cell per 2 dp).
+ * The app's icons. In the pixel look: drawn on a 12×12 pixel grid ('#' = filled) so they share the pixel unit with
+ * everything else, built into ImageVectors so they tint and size like any Material icon (24 dp = one cell per 2 dp).
+ * In the Classic look: the matching Material rounded icon.
  */
 object PI {
     private val cache = HashMap<String, ImageVector>()
-    private fun icon(name: String, rows: String): ImageVector = cache.getOrPut(name) {
+    private val material by lazy {
+        mapOf(
+            "play" to Icons.Rounded.PlayArrow, "pause" to Icons.Rounded.Pause, "next" to Icons.Rounded.SkipNext, "prev" to Icons.Rounded.SkipPrevious,
+            "shuffle" to Icons.Rounded.Shuffle, "repeat" to Icons.Rounded.Repeat, "repeat1" to Icons.Rounded.RepeatOne, "add" to Icons.Rounded.Add,
+            "addbox" to Icons.Rounded.AddCircleOutline, "checkbox" to Icons.Rounded.CheckCircle, "removebox" to Icons.Rounded.RemoveCircleOutline,
+            "close" to Icons.Rounded.Close, "more" to Icons.Rounded.MoreVert, "back" to Icons.Rounded.ArrowBack, "down" to Icons.Rounded.KeyboardArrowDown,
+            "right" to Icons.Rounded.ChevronRight, "search" to Icons.Rounded.Search, "searchoff" to Icons.Rounded.SearchOff, "note" to Icons.Rounded.MusicNote,
+            "library" to Icons.Rounded.LibraryMusic, "queue" to Icons.Rounded.QueueMusic, "pladd" to Icons.Rounded.PlaylistAdd, "playnext" to Icons.Rounded.PlaylistPlay,
+            "heart" to Icons.Rounded.Favorite, "heartout" to Icons.Rounded.FavoriteBorder, "compass" to Icons.Rounded.Explore, "flat" to Icons.Rounded.Map,
+            "cube" to Icons.Rounded.ViewInAr, "layers" to Icons.Rounded.Layers, "similar" to Icons.Rounded.Hub, "route" to Icons.Rounded.Route,
+            "drag" to Icons.Rounded.DragHandle, "edit" to Icons.Rounded.Edit, "delete" to Icons.Rounded.Delete, "gear" to Icons.Rounded.Settings,
+            "snow" to Icons.Rounded.AcUnit, "sparkle" to Icons.Rounded.AutoAwesome, "person" to Icons.Rounded.Person, "link" to Icons.Rounded.Link,
+            "refresh" to Icons.Rounded.Refresh,
+        )
+    }
+    private fun icon(name: String, rows: String): ImageVector =
+        if (!LookState.current.pixel) material[name] ?: pixelIcon(name, rows) else pixelIcon(name, rows)
+    private fun pixelIcon(name: String, rows: String): ImageVector = cache.getOrPut(name) {
         val g = rows.trimIndent().lines()
         ImageVector.Builder(name, 24.dp, 24.dp, 12f, 12f).apply {
             path(fill = SolidColor(Color.Black)) {

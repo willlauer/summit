@@ -99,7 +99,8 @@
     'op.delete': ['delete stage', 'ステージの削除'], 'op.remove': ['remove track', '曲の除外'], 'op.shuffle': ['shuffle picks', 'シャッフル'],
     'op.new': ['new flow', '新しいフロー'], 'op.open': ['open flow', 'フローを開く'], 'op.radius': ['change radius', '半径の変更'], 'op.length': ['change length', '長さの変更'],
     plChangedElsewhere: ['This playlist changed on another device: showing the latest version', 'このプレイリストは別のデバイスで変更されました: 最新の内容を表示しています'],
-    v3dTip: ['3D map (drag to orbit, shift+drag to pan)', '3D マップ（ドラッグで回転、shift+ドラッグで移動）'],
+    v3dTip: ['3D map: drag to move, right-drag or shift+drag to rotate, scroll to zoom', '3D マップ: ドラッグで移動、右ドラッグか shift+ドラッグで回転、スクロールでズーム'],
+    'look.classic': ['Classic', 'クラシック'], 'look.pixel': ['Pixel', 'ピクセル'], lookTip: ['Look: the style of the whole app', '見た目: アプリ全体のスタイル'],
     // tree mode
     'mode.tree': ['Tree', 'ツリー'], explore: ['⑂ Explore similar', '⑂ 似た曲をたどる'], exploreTip: ['Start a tree from this track in Tree mode', 'ツリーモードでこの曲からツリーを始める'],
     treeSeed: ['Start from a song', '曲から始める'], treeSeedPh: ['Search a name or a vibe…', '名前や雰囲気で検索…'],

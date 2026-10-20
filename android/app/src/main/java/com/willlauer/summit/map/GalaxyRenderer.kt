@@ -23,6 +23,11 @@ class GalaxyRenderer : GLSurfaceView.Renderer {
     @Volatile private var pending: Frame? = null
     /** Seconds since the map appeared: drives the wind (set every tick, independent of camera frames). */
     @Volatile var time = 0f
+    /** The look: pixel stars on the grid (and wind), or round glowing stars on a still sky; the sky's two colours. */
+    @Volatile var pixel = true
+    @Volatile var wind = true
+    @Volatile var skyTop = floatArrayOf(0.027f, 0.063f, 0.106f)
+    @Volatile var skyBottom = floatArrayOf(0.012f, 0.027f, 0.051f)
     private var frame: Frame? = null
     private var prog = 0; private var progHalo = 0; private var progSky = 0
     private val vbo = IntArray(3)
@@ -85,6 +90,9 @@ class GalaxyRenderer : GLSurfaceView.Renderer {
         glUniform1f(glGetUniformLocation(progSky, "uTime"), time % 3600f)
         glUniform1f(glGetUniformLocation(progSky, "uPan"), f.pan)
         glUniform1f(glGetUniformLocation(progSky, "uPx"), f.pixel)
+        glUniform1f(glGetUniformLocation(progSky, "uWind"), if (wind) 1f else 0f)
+        glUniform3fv(glGetUniformLocation(progSky, "uTop"), 1, skyTop, 0)
+        glUniform3fv(glGetUniformLocation(progSky, "uBottom"), 1, skyBottom, 0)
         glDrawArrays(GL_TRIANGLES, 0, 3)
     }
 
@@ -94,11 +102,12 @@ class GalaxyRenderer : GLSurfaceView.Renderer {
         glUniformMatrix4fv(glGetUniformLocation(p, "uProj"), 1, false, f.proj, 0)
         glUniform1f(glGetUniformLocation(p, "uSize"), f.dot * (if (halo) 3.2f else 1f))
         glUniform1f(glGetUniformLocation(p, "uPx"), f.pixel)
+        glUniform1f(glGetUniformLocation(p, "uPixel"), if (pixel) 1f else 0f)
         glUniform2f(glGetUniformLocation(p, "uRes"), f.w.toFloat(), f.h.toFloat())
         glUniform1f(glGetUniformLocation(p, "uZoom"), f.zoom)
         glUniform1f(glGetUniformLocation(p, "uRef"), f.ref)
         glUniform1f(glGetUniformLocation(p, "uMorph"), f.morph)
-        glUniform1f(glGetUniformLocation(p, "uGlow"), 0.09f)
+        glUniform1f(glGetUniformLocation(p, "uGlow"), if (pixel) 0.09f else 0.2f)
         attr(0, 0, 3); attr(1, 1, 3); attr(2, 2, 1)
         glDrawArrays(GL_POINTS, 0, n)
     }
@@ -126,12 +135,14 @@ class GalaxyRenderer : GLSurfaceView.Renderer {
         val BG = floatArrayOf(0x08 / 255f, 0x08 / 255f, 0x0D / 255f)
         const val VERT = """#version 300 es
             layout(location = 0) in vec3 aPos; layout(location = 1) in vec3 aColor; layout(location = 2) in float aAlpha;
-            uniform mat4 uView, uProj; uniform float uSize, uZoom, uRef, uMorph, uPx; uniform vec2 uRes;
+            uniform mat4 uView, uProj; uniform float uSize, uZoom, uRef, uMorph, uPx, uPixel; uniform vec2 uRes;
             out vec3 vColor; out float vAlpha; out float vCells;
             void main() {
               vec4 mv = uView * vec4(aPos, 1.0);
               float persp = mix(1.0, clamp(uRef / -mv.z, 0.35, 2.6), uMorph);
               vec4 clip = uProj * mv;
+              vColor = aColor; vAlpha = aAlpha;
+              if (uPixel < 0.5) { gl_PointSize = uSize * uZoom * persp; gl_Position = clip; vCells = 0.0; return; }  // Classic: free-floating
               // pixel art: whole pixel units in size, centred on the pixel grid
               vCells = max(1.0, floor(uSize * uZoom * persp / uPx + 0.5));
               gl_PointSize = vCells * uPx;
@@ -143,7 +154,15 @@ class GalaxyRenderer : GLSurfaceView.Renderer {
         const val CORE = """#version 300 es
             precision mediump float;
             in vec3 vColor; in float vAlpha; in float vCells; out vec4 o;
-            void main() {  // a square star; bigger ones get a white centre pixel
+            void main() {
+              if (vCells == 0.0) {  // Classic: a round star with a hot centre
+                float r = length(gl_PointCoord - 0.5);
+                float a = smoothstep(0.5, 0.36, r);
+                if (a <= 0.0) discard;
+                o = vec4(mix(vColor, vec3(1.0), smoothstep(0.26, 0.0, r) * 0.35), a * vAlpha);
+                return;
+              }
+              // Pixel: a square star; bigger ones get a white centre pixel
               vec2 q = floor(gl_PointCoord * vCells);
               float centre = (vCells >= 3.0 && all(equal(q, vec2(floor(vCells / 2.0))))) ? 1.0 : 0.0;
               vec3 c = mix(mix(vColor, vec3(1.0), 0.15) * 0.82, vec3(0.92, 0.97, 1.0), centre * 0.7);
@@ -155,15 +174,16 @@ class GalaxyRenderer : GLSurfaceView.Renderer {
             void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }"""
         const val SKY_FS = """#version 300 es
             precision highp float;
-            uniform vec2 uRes; uniform float uTime, uPan, uPx;
+            uniform vec2 uRes; uniform float uTime, uPan, uPx, uWind; uniform vec3 uTop, uBottom;
             out vec4 o;
             float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
             void main() {
               vec2 cell = floor(vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y) / uPx);
               // smooth, very dark gradient; sub-level noise hides 8-bit banding
               float y = gl_FragCoord.y / uRes.y;
-              vec3 c = mix(vec3(0.012, 0.027, 0.051), vec3(0.027, 0.063, 0.106), y * y);
+              vec3 c = mix(uBottom, uTop, y * y);
               c += (hash(gl_FragCoord.xy) - 0.5) / 255.0;
+              if (uWind < 0.5) { o = vec4(c, 1.0); return; }
               float t = uTime, cols = uRes.x / uPx;
               float gust = 0.55 + 0.45 * sin(t * 0.21) * sin(t * 0.13 + 1.3);
               // gust streaks: lanes every 11 units; a bright head with a fading tail, drifting a little up and down
@@ -187,7 +207,15 @@ class GalaxyRenderer : GLSurfaceView.Renderer {
         const val HALO = """#version 300 es
             precision mediump float;
             in vec3 vColor; in float vAlpha; in float vCells; uniform float uGlow; out vec4 o;
-            void main() {  // glow in two hard steps, on the pixel grid
+            void main() {
+              if (vCells == 0.0) {  // Classic: a soft round glow
+                float r = length(gl_PointCoord - 0.5) * 2.0;
+                float a = exp(-r * r * 5.0) * uGlow * vAlpha * vAlpha;
+                if (a < 0.004) discard;
+                o = vec4(vColor * a, a);
+                return;
+              }
+              // Pixel: glow in two hard steps, on the pixel grid
               vec2 q = (floor(gl_PointCoord * vCells) + 0.5) / vCells - 0.5;
               float r = max(abs(q.x), abs(q.y)) * 2.0;
               float a = (r < 0.45 ? 1.0 : r < 0.8 ? 0.4 : 0.0) * uGlow * vAlpha * vAlpha;

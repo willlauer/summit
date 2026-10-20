@@ -45,6 +45,7 @@
     <span class="seg" id="labelsTog"><button data-v="fam" data-i18n="genres">Genres</button><button data-v="sub" data-i18n="subgenres">Subgenres</button></span></span>
   <div class="search"><input id="q" data-i18n-ph="searchPh" placeholder="Search a vibe or a name" autocomplete="off" spellcheck="false"></div>
   <button id="libBtn" class="small ghost" hidden></button>
+  <div class="seg" id="look" data-i18n-title="lookTip"></div>
   <div class="seg" id="lang"><button data-v="en">EN</button><button data-v="ja">日本語</button></div>
   <span class="help hint small" data-i18n-html="shellHelp"></span>
 </header>
@@ -65,7 +66,7 @@ function setMode(m) {
   if (!loaded[m]) {
     const f = document.createElement('iframe');
     f.src = PAGES[m]; f.dataset.mode = m;
-    f.addEventListener('load', () => { H.applyHelp(f.contentDocument); H.applyLang(f.contentDocument); });
+    f.addEventListener('load', () => { H.applyHelp(f.contentDocument); H.applyLang(f.contentDocument); H.applyLook(f.contentDocument); });
     frames.appendChild(f); loaded[m] = f;
   }
   Object.entries(loaded).forEach(([k, f]) => f.classList.toggle('on', k === m));
@@ -81,6 +82,7 @@ function colorMenu() {
   sel.value = H.color;
 }
 function syncToggles() {
+  document.getElementById('look').innerHTML = Object.entries(H.LOOKS).map(([k, l]) => `<button data-v="${k}" class="${k === H.look ? 'on' : ''}">${H.esc(H.t('look.' + k))}</button>`).join('');
   document.querySelectorAll('#labelsTog button').forEach(b => b.classList.toggle('on', !!H.labelShow[b.dataset.v]));
   document.querySelectorAll('#lang button').forEach(b => b.classList.toggle('on', b.dataset.v === H.lang));
 }
@@ -116,6 +118,11 @@ H.on('color', m => { document.getElementById('color').value = m; });  // modes c
 document.getElementById('labelsTog').onclick = e => {
   const b = e.target.closest('button'); if (!b) return;
   H.setLabels({ ...H.labelShow, [b.dataset.v]: !H.labelShow[b.dataset.v] }); syncToggles();
+};
+document.getElementById('look').onclick = e => {
+  const b = e.target.closest('button'); if (!b || b.dataset.v === H.look) return;
+  H.setLook(b.dataset.v); syncToggles();
+  if (H.data) H.renderPlayer();
 };
 document.getElementById('lang').onclick = e => {
   const b = e.target.closest('button'); if (!b || b.dataset.v === H.lang) return;

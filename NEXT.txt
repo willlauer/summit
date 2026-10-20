@@ -1,7 +1,8 @@
-The waveform sometimes looks different / messed up. Maybe needs to be a separate view or something.
+Done: playlists (create / add / reorder), Back / Forward, double-click to go to a song. Waveform dropped (the player has a plain seek bar now).
 
-No way to create playlists / add to playlists?
-
-No back button / easy way to navigate back.
-
-double-click to "go-to" song (as long as is back button)
+Done: switchable looks on the laptop (header: Classic / Pixel) and the phone (Library → ⚙, or the map's layers sheet).
+  1. Classic: dark glass, Inter, neon cluster colours, round glowing map stars.
+  2. Pixel: pixel-art ice: pixel font and icons, stepped corners, square stars on the grid, frosted label plates,
+     wind and blown snow over the night sky, snow on panels and menus, snow on Now Playing.
+  A third look is another set of tokens: Looks in android/…/ui/Theme.kt, LOOKS in web/core.js plus a
+  :root[data-look] block in web/shared.css.

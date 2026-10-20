@@ -12,9 +12,10 @@ import kotlin.math.*
 
 /**
  * The map: a GL view plus the camera, animations, gestures and picking (all on the UI thread). Mirrors web/galaxy.js:
- * positions morph between spaces and between the flat map and 3D; drag pans (orbits in 3D), pinch zooms, two-finger
- * twist rotates in 3D; tap / double-tap / long-press report the nearest track. [Listener.onFrame] runs after every
- * camera or position change so the Compose overlay (labels, rings, paths) can redraw.
+ * positions morph between spaces and between the flat map and 3D. One finger pans and pinch zooms; in 3D, a two-finger
+ * twist turns the map and two fingers moved up / down tilt it, each gesture locked to whichever it is (see onTouchEvent).
+ * Tap / double-tap / long-press report the nearest track.
+ * [Listener.onFrame] runs after every camera or position change so the Compose overlay (labels, rings, paths) can redraw.
  */
 @SuppressLint("ViewConstructor", "ClickableViewAccessibility")
 class GalaxyView(context: Context) : GLSurfaceView(context) {
@@ -241,7 +242,7 @@ class GalaxyView(context: Context) : GLSurfaceView(context) {
         applyCamera()
         projectAll()
         renderer.submit(GalaxyRenderer.Frame(
-            view.copyOf(), proj.copyOf(), (fitD / cam.d).pow(0.33f).coerceIn(0.85f, 2.4f), cam.d, morph, 2.6f * density,
+            view.copyOf(), proj.copyOf(), (fitD / cam.d).pow(0.33f).coerceIn(0.85f, 2.4f), cam.d, morph, dotDp * density,
             if (posDirty) cur.copyOf() else null, if (colDirty) colors.copyOf() else null, if (alphaDirty) alpha.copyOf() else null, n,
             (System.nanoTime() - born) / 1e9f, cam.tx / (fitD * 2f), 3f * density, w, h,
         ))
@@ -252,11 +253,20 @@ class GalaxyView(context: Context) : GLSurfaceView(context) {
         if (moving) kick()
     }
 
+    /** Switch looks: pixel (square stars on the grid, wind) or Classic (round glowing stars, still sky). */
+    fun setStyle(pixel: Boolean, wind: Boolean, top: Int, bottom: Int) {
+        val rgb = { c: Int -> floatArrayOf(((c shr 16) and 255) / 255f, ((c shr 8) and 255) / 255f, (c and 255) / 255f) }
+        renderer.pixel = pixel; renderer.wind = wind; renderer.skyTop = rgb(top); renderer.skyBottom = rgb(bottom)
+        dotDp = if (pixel) 2.6f else 4.2f
+        kick()
+    }
+    private var dotDp = 2.6f
+
     // The stars twinkle: a slow tick while the map is on screen (the map itself only redraws when something moves).
     private val born = System.nanoTime()
     // The wind: only the sky redraws (no re-projecting tracks), ~30 times a second while the map is on screen.
     private val ambient = object : Runnable {
-        override fun run() { renderer.time = (System.nanoTime() - born) / 1e9f; if (w > 0) requestRender(); postDelayed(this, 33) }
+        override fun run() { renderer.time = (System.nanoTime() - born) / 1e9f; if (w > 0 && renderer.wind) requestRender(); postDelayed(this, 33) }
     }
     override fun onAttachedToWindow() { super.onAttachedToWindow(); post(ambient) }
     override fun onDetachedFromWindow() { removeCallbacks(ambient); super.onDetachedFromWindow() }
@@ -268,13 +278,9 @@ class GalaxyView(context: Context) : GLSurfaceView(context) {
     }
 
     // ---- gestures ----
-    private var twist: Float? = null
     private val scaler = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
-        var fx = 0f; var fy = 0f
-        override fun onScaleBegin(d: ScaleGestureDetector): Boolean { fx = d.focusX; fy = d.focusY; return true }
-        override fun onScale(d: ScaleGestureDetector): Boolean {
-            panBy(d.focusX - fx, d.focusY - fy); fx = d.focusX; fy = d.focusY
-            zoomAt(1f / d.scaleFactor, d.focusX, d.focusY, immediate = true)
+        override fun onScale(d: ScaleGestureDetector): Boolean {  // pinch zooms (not during a tilt); the rest is in onTouchEvent
+            if (lock != Lock.TILT) zoomAt(1f / d.scaleFactor, d.focusX, d.focusY, immediate = true)
             return true
         }
     }).apply { isQuickScaleEnabled = false }
@@ -282,12 +288,11 @@ class GalaxyView(context: Context) : GLSurfaceView(context) {
         override fun onDown(e: MotionEvent): Boolean { velX = 0f; velY = 0f; return true }
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
             if (e2.pointerCount > 1 || scaler.isInProgress) return true
-            if (is3D) { goal.th += dx * 0.006f; goal.ph = (goal.ph + dy * 0.006f).coerceIn(0f, 1.45f); cam.th = goal.th; cam.ph = goal.ph; kick() }
-            else panBy(-dx, -dy)
+            panBy(-dx, -dy)  // one finger pans, flat or 3D
             return true
         }
         override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
-            if (is3D || e2.pointerCount > 1) return false
+            if (e2.pointerCount > 1) return false
             val wpp = worldPerPx(); val r = rightUp()
             velX = (-vx * r[0] + vy * r[2]) * wpp / 1000f; velY = (-vx * r[1] + vy * r[3]) * wpp / 1000f
             kick(); return true
@@ -299,15 +304,49 @@ class GalaxyView(context: Context) : GLSurfaceView(context) {
         }
     })
 
+    private enum class Lock { NONE, TWIST, TILT, ZOOM }
+    private var lock = Lock.NONE
+    private var two = false; private var twoX = 0f; private var twoY = 0f; private var twoA = 0f
+    private var startA = 0f; private var startY = 0f; private var startSpan = 1f
+    private fun wrap(a: Float): Float = if (a > PI) a - (2 * PI).toFloat() else if (a < -PI) a + (2 * PI).toFloat() else a
     override fun onTouchEvent(e: MotionEvent): Boolean {
         touched = true
         scaler.onTouchEvent(e)
         gestures.onTouchEvent(e)
-        if (is3D && e.pointerCount == 2) {  // two-finger twist turns the 3D view
-            val a = atan2(e.getY(1) - e.getY(0), e.getX(1) - e.getX(0))
-            twist?.let { goal.th -= (a - it); cam.th = goal.th; kick() }
-            twist = a
-        } else twist = null
+        // Two fingers, like a maps app. Flat map: they pan (and pinch zooms). 3D: each gesture locks to one intent, the
+        // first to show clearly: a twist turns the map (following your fingers; pinch still zooms), both fingers moving
+        // up / down tilt it (no zoom), spreading / closing zooms (no turn or tilt). Nothing turns or tilts by accident.
+        if (e.pointerCount >= 2) {
+            val fx = (e.getX(0) + e.getX(1)) / 2; val fy = (e.getY(0) + e.getY(1)) / 2
+            val ang = atan2(e.getY(1) - e.getY(0), e.getX(1) - e.getX(0))
+            val span = hypot(e.getX(1) - e.getX(0), e.getY(1) - e.getY(0))
+            when (e.actionMasked) {
+                MotionEvent.ACTION_POINTER_DOWN -> { twoX = fx; twoY = fy; twoA = ang; two = true; lock = Lock.NONE; startA = ang; startY = fy; startSpan = span }
+                MotionEvent.ACTION_MOVE -> if (two) {
+                    val dx = fx - twoX; val dy = fy - twoY
+                    if (!is3D) panBy(dx, dy)
+                    else {
+                        if (lock == Lock.NONE) {
+                            val turned = abs(wrap(ang - startA)); val scaled = abs(span / startSpan - 1); val lifted = abs(fy - startY) / density
+                            lock = when {
+                                turned > 0.2f -> Lock.TWIST
+                                lifted > 22f && scaled < 0.12f -> Lock.TILT
+                                scaled > 0.1f -> Lock.ZOOM
+                                else -> Lock.NONE
+                            }
+                        }
+                        when (lock) {
+                            Lock.TWIST -> { goal.th += wrap(ang - twoA); cam.th = goal.th; kick() }
+                            Lock.TILT -> { goal.ph = (goal.ph - dy * 0.006f).coerceIn(0f, 1.45f); cam.ph = goal.ph; kick() }
+                            else -> {}
+                        }
+                    }
+                    twoX = fx; twoY = fy; twoA = ang
+                }
+                MotionEvent.ACTION_POINTER_UP -> two = false
+            }
+        }
+        if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) two = false
         return true
     }
 
