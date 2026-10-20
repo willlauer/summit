@@ -4,8 +4,8 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Summit Map</title>
 <link rel="stylesheet" href="/web/shared.css">
-<script src="/web/vendor/plotly.min.js"></script>
 <script src="/web/map.js"></script>
+<script type="module" src="/web/galaxy.js"></script>
 <style>
   /* layout only: components come from shared.css */
   body { display: grid; grid-template-columns: minmax(0, 1fr) 3px var(--panel-w, 400px); }
@@ -34,24 +34,41 @@
 <script>
 const H = S.H, t_ = H.t, map = document.getElementById('map'), body = document.getElementById('body');
 // Selection is a kind (lasso | search | playlist) plus a name, so its label can be shown in either language.
-const st = { tab: 'track', cur: null, nbrs: [], sel: [], selKind: '', selName: '' };
+const st = { tab: 'track', cur: null, nbrs: [], sel: [], selKind: '', selName: '', selId: null };
 const selLabel = () => ({ lasso: t_('lasso'), search: t_('search', { x: st.selName }), playlist: st.selName })[st.selKind] || '';
 const similar = i => t_('similarTo', { x: S.tracks[i].title });
+// The playlist on show in Selection, when its tracks can be edited there (flows get theirs from the route).
+const editPl = () => (st.selKind === 'playlist' ? S.data.playlists.find(p => p.id === st.selId && p.kind === 'playlist') : null);
 
 S.ready.then(() => {
-  S.plot(map, { space: H.space, colorMode: H.color }).then(() => {
-    map.on('plotly_hover', e => { const p = e.points.find(p => p.curveNumber === 0); if (p && e.event && e.event.altKey) H.player.audition(p.pointIndex); });
-    map.on('plotly_click', async e => {
-      const p = e.points.find(p => p.curveNumber === 0); if (!p) return;
-      await showTrack(p.pointIndex);
-      H.player.play(p.pointIndex, { queue: [p.pointIndex, ...st.nbrs], label: similar(p.pointIndex) });
-    });
+  const onTap = async i => {
+    if (i == null) return;
+    H.navPush();
+    await showTrack(i);
+    H.player.play(i, { queue: [i, ...st.nbrs], label: similar(i) });
+  };
+  S.plot(map, { space: H.space, colorMode: H.color, onTap }).then(() => {
     S.ctrlLasso(map, (idxs, add) => {
+      H.navPush();
       st.sel = add && st.selKind === 'lasso' ? [...new Set([...st.sel, ...idxs])] : idxs;
       st.selKind = 'lasso'; S.focus(map, st.sel); setTab('selection');
-    }, clearSel);
-    S.splitter(document.getElementById('splitPanel'), { target: document.getElementById('panel'), cssVar: '--panel-w', sign: -1, min: 300, max: 900, key: 'summit.map.panel', onResize: () => Plotly.Plots.resize(map) });
+    }, () => { if (st.sel.length) { H.navPush(); clearSel(); } });
+    S.splitter(document.getElementById('splitPanel'), { target: document.getElementById('panel'), cssVar: '--panel-w', sign: -1, min: 300, max: 900, key: 'summit.map.panel' });
     setTab('playlists');
+    H.registerView('map', {
+      save: () => ({ tab: st.tab, cur: st.cur, sel: st.sel, selKind: st.selKind, selName: st.selName, selId: st.selId, space: H.space, range: S.getRange(map) }),
+      async load(v) {
+        Object.assign(st, { tab: v.tab, cur: v.cur, sel: v.sel, selKind: v.selKind, selName: v.selName, selId: v.selId });
+        const p = st.selKind === 'playlist' && S.data.playlists.find(p => p.id === st.selId);
+        if (p) st.sel = H.playlistTracks(p);  // it may have been edited since
+        S.focus(map, st.sel.length ? st.sel : null);
+        st.nbrs = st.cur == null ? [] : await H.neighbors(st.cur, 10);
+        S.highlight(map, st.cur == null ? [] : [st.cur, ...st.nbrs], H.space);
+        if (v.space === H.space) S.setRange(map, v.range);
+        setTab(st.tab);
+      },
+      async show(i) { await showTrack(i); S.centerOn(map, i, H.space); },
+    });
   });
 });
 
@@ -71,10 +88,11 @@ function setTab(t) {
   body.innerHTML = { track: trackHTML, selection: selectionHTML, playlists: playlistsHTML, liked: likedHTML }[t]();
 }
 
-function trackRow(j, list) {
-  const t = S.tracks[j];
-  return `<div class="row${H.player.current === j ? ' playing' : ''}" data-act="open" data-list="${list}" data-i="${j}"><span class="dot" style="--c:${S.col(t.cluster)}"></span>
-    <span class="grow">${S.esc(t.title)} <span class="muted">· ${S.esc(t.artist)}</span></span><span class="muted small">${t.bpm ?? ''}</span>${S.heart(j)}</div>`;
+// pos: the row's place in an editable playlist (drag to reorder, × removes).
+function trackRow(j, list, pos) {
+  const t = S.tracks[j], edit = pos != null;
+  return `<div class="row${H.player.current === j ? ' playing' : ''}" data-act="open" data-list="${list}" data-i="${j}"${edit ? ` draggable="true" data-pos="${pos}"` : ''} title="${t_('rowTip')}"><span class="dot" style="--c:${S.col(t.cluster)}"></span>
+    <span class="grow">${S.esc(t.title)} <span class="muted">· ${S.esc(t.artist)}</span></span><span class="muted small">${t.bpm ?? ''}</span>${S.heart(j)}${edit ? `<button class="bare rm" data-act="plrm" data-i="${j}" title="${t_('removeFromPl')}">×</button>` : ''}</div>`;
 }
 
 function trackHTML() {
@@ -84,7 +102,7 @@ function trackHTML() {
     <div class="kicker"><span contenteditable data-f="${t.family}" spellcheck="false">${S.esc(H.familyName(t.family))}</span>${H.isSplit(t.family) ? ` › <span contenteditable data-c="${t.cluster}" spellcheck="false">${S.esc(H.leafName(t.cluster))}</span>` : ''}</div>
     <h2 style="margin-top:6px">${S.esc(t.title)}</h2><div class="muted">${S.esc(t.artist)}${t.album ? ' · ' + S.esc(t.album) : ''}</div>
     <div class="facts"><span>${t.bpm ?? '—'} BPM</span><span>${t.key ?? '—'}</span><span>${S.fmtDur(t.dur)}</span><span>${S.esc((t.ext || '').toUpperCase())}</span></div>
-    <div class="actions"><button class="primary" data-act="playtrack">${t_(H.player.current === t.i && H.player.playing ? 'pause' : 'play')}</button>${S.heart(t.i)}</div>
+    <div class="actions"><button class="primary" data-act="playtrack">${t_(H.player.current === t.i && H.player.playing ? 'pause' : 'play')}</button><button data-act="addpl">${t_('addToPl')}</button><button data-act="explore" title="${t_('exploreTip')}">${t_('explore')}</button>${S.heart(t.i)}</div>
     <h3>${t_('tags')}</h3>${t.confirmed.length ? t.confirmed.map(g => S.chip(g, { removable: true, i: t.i })).join('') : `<span class="muted">${t_('untagged')}</span>`}
     <h3>${t_('suggested')}</h3>${sug.length ? sug.map(g => S.chip(g, { suggested: true, score: sc[g][t.i], i: t.i })).join('') : `<span class="muted">${t_('nothingAbove')}</span>`}
     <h3>${t_('styles')}</h3>${t.styles.map(([s, v]) => `<div class="meter"><span>${S.esc(s)}</span><div class="track"><b style="width:${Math.min(100, v * 100)}%"></b></div></div>`).join('')}
@@ -103,10 +121,12 @@ function selectionHTML() {
     <div class="kicker">${S.esc(selLabel())}</div>
     <div class="stats" style="margin-top:8px"><div class="stat"><b>${st.sel.length}</b><span>${t_('tracks')}</span></div><div class="stat warn"><b>${untagged}</b><span>${t_('untagged')}</span></div>
       ${bpms.length ? `<div class="stat"><b>${bpms[Math.floor(bpms.length * 0.1)]}–${bpms[Math.floor(bpms.length * 0.9)]}</b><span>BPM</span></div>` : ''}</div>
-    <div class="actions"><button class="primary" data-act="save">${t_('savePlaylist')}</button><button data-act="vibe">${t_('teachVibe')}</button><button class="ghost" data-act="clear">${t_('clear')}</button></div>
+    <div class="actions"><button class="primary" data-act="save">${t_('savePlaylist')}</button><button data-act="addpl" data-sel="1">${t_('addToPl')}</button><button data-act="vibe">${t_('teachVibe')}</button><button class="ghost" data-act="clear">${t_('clear')}</button></div>
     <h3>${t_('commonTags')}</h3>${top.map(g => `<span class="chip sugg" style="--c:${H.UI.suggested}"><i></i>${S.esc(g)}<span class="score">${Math.round(avg[g] * 100)}</span><button data-act="tagall" data-tag="${S.esc(g)}" title="${t_('tagAllN', { n: st.sel.length })}">${t_('all')}</button></span>`).join('')}
     <h3>${t_('clusters')}</h3>${Object.entries(cl).sort((a, b) => b[1] - a[1]).map(([c, n]) => `<div class="meter"><span>${S.esc(H.clusterName(+c))}</span><div class="track"><b style="width:${(n / st.sel.length) * 100}%;--c:${S.col(+c)}"></b></div></div>`).join('')}
-    <h3>${t_('tracks')}</h3>${st.sel.slice(0, 60).map(j => trackRow(j, 'sel')).join('')}${st.sel.length > 60 ? `<div class="muted small" style="padding:6px">${t_('andMore', { n: st.sel.length - 60 })}</div>` : ''}`;
+    ${editPl()
+      ? `<h3>${t_('tracks')} <span class="muted small">${t_('dragToReorder')}</span></h3>${st.sel.map((j, k) => trackRow(j, 'sel', k)).join('')}`
+      : `<h3>${t_('tracks')}</h3>${st.sel.slice(0, 60).map(j => trackRow(j, 'sel')).join('')}${st.sel.length > 60 ? `<div class="muted small" style="padding:6px">${t_('andMore', { n: st.sel.length - 60 })}</div>` : ''}`}`;
 }
 
 function playlistsHTML() {
@@ -126,20 +146,23 @@ function likedHTML() {
     <h3>${t_('recentFirst')}</h3>${ids.map(j => trackRow(j, 'liked')).join('')}`;
 }
 
-function clearSel() { st.sel = []; st.selKind = ''; S.focus(map, null); if (st.tab === 'selection') setTab('selection'); else document.getElementById('selN').textContent = 0; }
+function clearSel() { st.sel = []; st.selKind = ''; st.selId = null; S.focus(map, null); if (st.tab === 'selection') setTab('selection'); else document.getElementById('selN').textContent = 0; }
 
 body.addEventListener('click', async e => {
   const el = e.target.closest('[data-act]'); if (!el) return;
   const a = el.dataset.act, i = +el.dataset.i, tag = el.dataset.tag;
   try {
-    if (a === 'open') {
+    if (a === 'open') {  // click plays (the map marks it); double-click goes to it
+      if (e.detail > 1) return;  // second click of a double-click: don't restart the track
       const list = el.dataset.list;
       const q = list === 'sel' ? st.sel : list === 'liked' ? H.likedList() : st.nbrs;
       const label = list === 'sel' ? selLabel() : list === 'liked' ? t_('liked') : similar(st.cur);
-      if (list === 'sel' || list === 'liked') await showTrack(i);
       H.player.play(i, { queue: q, label });
       return;
     }
+    if (a === 'explore') { H.explore(st.cur); return; }
+    if (a === 'addpl') { H.playlistMenu(el, el.dataset.sel ? st.sel : [st.cur]); return; }
+    if (a === 'plrm') await H.removeFromPlaylist(editPl().id, S.tracks[i].id);
     if (a === 'playtrack') {
       if (H.player.current === st.cur) H.player.toggle();
       else H.player.play(st.cur, { queue: [st.cur, ...st.nbrs], label: similar(st.cur) });
@@ -152,8 +175,13 @@ body.addEventListener('click', async e => {
     if (a === 'tagall') { const r = await H.setTag(st.sel, tag, 'confirmed'); S.toast(t_('taggedN', { n: st.sel.length, x: tag }) + (r.trained ? t_('retrained') : '')); }
     if (a === 'save') { const n = prompt(t_('playlistName'), st.selKind === 'search' ? st.selName : t_('newPlaylist')); if (n) { await H.createPlaylist(n, st.sel); S.toast(t_('saved', { x: n })); } }
     if (a === 'vibe') { const n = prompt(t_('vibePrompt'), ''); if (n) { await H.newVibe(n, st.sel); S.toast(t_('vibeTrained', { x: n, n: st.sel.length })); } }
-    if (a === 'clear') { clearSel(); return; }
-    if (a === 'showpl') { const p = S.data.playlists.find(p => p.id === +el.dataset.id); st.sel = p.ids.map(id => S.data.byId[id]).filter(x => x != null); st.selKind = 'playlist'; st.selName = p.name; S.focus(map, st.sel); setTab('selection'); return; }
+    if (a === 'clear') { H.navPush(); clearSel(); return; }
+    if (a === 'showpl') {
+      const p = S.data.playlists.find(p => p.id === +el.dataset.id);
+      H.navPush();
+      Object.assign(st, { sel: H.playlistTracks(p), selKind: 'playlist', selName: p.name, selId: p.id });
+      S.focus(map, st.sel); setTab('selection'); return;
+    }
     if (a === 'delpl') { const p = S.data.playlists.find(p => p.id === +el.dataset.id); if (confirm(t_('deletePl', { x: p.name }))) await H.deletePlaylist(p.id); }
     if (a === 'export') { const r = await H.exportAll(); S.toast(t_('exported', { p: r.playlists, n: r.tracks })); return; }
   } catch (err) { S.toast(err.message); }
@@ -165,17 +193,49 @@ body.addEventListener('focusout', async e => {
   if (f != null) { await H.renameFamily(+f, name); S.toast(t_('familyRenamed')); } else { await H.renameCluster(+c, name); S.toast(t_('groupRenamed')); }
 });
 body.addEventListener('keydown', e => { if ((e.target.dataset.c != null || e.target.dataset.f != null) && e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
-document.getElementById('tabs').onclick = e => { const b = e.target.closest('button'); if (b) setTab(b.dataset.v); };
+document.getElementById('tabs').onclick = e => { const b = e.target.closest('button'); if (b && b.dataset.v !== st.tab) { H.navPush(); setTab(b.dataset.v); } };
+body.addEventListener('dblclick', e => { const r = e.target.closest('.row[data-i]'); if (r && !e.target.closest('button')) H.dblGoTo(e, +r.dataset.i); });
+
+// Reorder an editable playlist by dragging its rows.
+let dragPos = null;
+const dropMarks = () => body.querySelectorAll('.drop-before, .drop-after').forEach(r => r.classList.remove('drop-before', 'drop-after'));
+body.addEventListener('dragstart', e => {
+  const r = e.target.closest('.row[data-pos]'); if (!r) return;
+  dragPos = +r.dataset.pos; r.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', r.dataset.i);
+});
+body.addEventListener('dragover', e => {
+  const r = e.target.closest('.row[data-pos]'); if (dragPos == null || !r) return;
+  e.preventDefault();
+  const b = r.getBoundingClientRect(), after = e.clientY > b.top + b.height / 2;
+  dropMarks(); r.classList.add(after ? 'drop-after' : 'drop-before');
+});
+body.addEventListener('drop', async e => {
+  const r = e.target.closest('.row[data-pos]'), p = editPl(); if (dragPos == null || !r || !p) return;
+  e.preventDefault();
+  const b = r.getBoundingClientRect(), to = +r.dataset.pos + (e.clientY > b.top + b.height / 2 ? 1 : 0);
+  const order = st.sel.slice(), [moved] = order.splice(dragPos, 1);
+  order.splice(to > dragPos ? to - 1 : to, 0, moved);
+  const offMap = p.ids.filter(id => S.data.byId[id] == null);  // tracks not on the map keep their place at the end
+  try { await H.setPlaylistIds(p.id, order.map(j => S.tracks[j].id).concat(offMap)); } catch (err) { S.toast(err.message); }
+});
+body.addEventListener('dragend', () => { dragPos = null; dropMarks(); body.querySelectorAll('.dragging').forEach(r => r.classList.remove('dragging')); });
 
 H.on('space', async s => { S.setSpace(map, s); if (st.cur != null) { st.nbrs = await H.neighbors(st.cur, 10); S.highlight(map, [st.cur, ...st.nbrs], s); } setTab(st.tab); });
 H.on('color', m => S.setColor(map, m));
 H.on('tags', () => { if (H.color !== 'cluster') S.setColor(map, H.color); if (st.tab !== 'playlists') setTab(st.tab); });
 H.on('clusters', () => S.relabel(map));
-H.on('playlists', () => { if (st.tab === 'playlists') setTab('playlists'); else document.getElementById('plN').textContent = S.data.playlists.length; });
+H.on('playlists', () => {
+  if (st.selKind === 'playlist') {  // the playlist on show may have gained, lost or reordered tracks
+    const p = S.data.playlists.find(p => p.id === st.selId);
+    if (p) { st.sel = H.playlistTracks(p); S.focus(map, st.sel); }
+  }
+  if (st.tab === 'playlists' || st.tab === 'selection') setTab(st.tab); else document.getElementById('plN').textContent = S.data.playlists.length;
+});
 H.on('search', (res, q) => {
   if (H.mode !== 'map') return;
   if (!res) { clearSel(); return; }
-  st.sel = res; st.selKind = 'search'; st.selName = q; S.focus(map, st.sel); setTab('selection');
+  st.sel = res; st.selKind = 'search'; st.selName = q; st.selId = null; S.focus(map, st.sel); setTab('selection');
 });
 H.on('player', i => {
   document.querySelectorAll('.row[data-i]').forEach(r => r.classList.toggle('playing', +r.dataset.i === i));

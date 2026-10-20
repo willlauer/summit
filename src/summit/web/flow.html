@@ -4,8 +4,8 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Summit Flow</title>
 <link rel="stylesheet" href="/web/shared.css">
-<script src="/web/vendor/plotly.min.js"></script>
 <script src="/web/map.js"></script>
+<script type="module" src="/web/galaxy.js"></script>
 <style>
   /* layout only: components come from shared.css */
   body { display: grid; grid-template-rows: minmax(0, 1fr) 3px var(--flow-h, 320px); }
@@ -102,22 +102,27 @@ function compute() {
 
 // ---- drawing ----
 const stageColor = j => S.col(S.tracks[j].cluster);
+// The corridor (every point within the radius of the route) and the numbered stage markers, drawn over the map.
+function drawRoute(ctx, { toPxXYZ, worldPerPx }) {
+  if (!st.res) return;
+  const W = st.res.W.map(([x, y]) => toPxXYZ(x, y, 0)), f = st.flow;
+  if (!W.length) return;
+  ctx.lineCap = ctx.lineJoin = 'round';
+  ctx.beginPath(); W.forEach(([x, y], k) => (k ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+  if (W.length === 1) ctx.lineTo(W[0][0] + 0.01, W[0][1]);
+  ctx.strokeStyle = 'rgba(255,255,255,.06)'; ctx.lineWidth = (2 * f.radius) / worldPerPx; ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.lineWidth = 12; ctx.stroke();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5; ctx.stroke();
+  W.forEach(([x, y], k) => {
+    ctx.beginPath(); ctx.arc(x, y, 15, 0, Math.PI * 2); ctx.strokeStyle = stageColor(f.stages[k]); ctx.lineWidth = 3; ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y, 10.5, 0, Math.PI * 2); ctx.fillStyle = '#000'; ctx.fill();
+    ctx.strokeStyle = k === st.sel ? H.UI.selected : H.UI.focus; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.font = '700 11px Inter, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(k + 1), x, y + 0.5);
+  });
+}
 function drawMap() {
-  const r = st.res, W = r.W, f = st.flow;
-  Plotly.restyle(map, { x: [W.map(p => p[0]), W.map(p => p[0])], y: [W.map(p => p[1]), W.map(p => p[1])] }, [2, 3]);
-  // Marks beat data (DESIGN.md): stage markers are annotations drawn after the cluster labels so they sit on top.
-  const marks = W.flatMap(([x, y], k) => [
-    { x, y, text: ' ', showarrow: false, width: 30, height: 30, bgcolor: 'rgba(0,0,0,0)', bordercolor: stageColor(f.stages[k]), borderwidth: 3 },
-    { x, y, text: String(k + 1), showarrow: false, width: 20, height: 20, bgcolor: '#000000', bordercolor: k === st.sel ? H.UI.selected : H.UI.focus, borderwidth: 2, borderpad: 1,
-      font: { family: 'Orbitron, sans-serif', size: 11, color: '#ffffff' } },
-  ]);
-  const shapes = [], rad = f.radius, sty = { fillcolor: 'rgba(255,255,255,.07)', layer: 'below', line: { width: 0 } };
-  for (let k = 0; k < W.length - 1; k++) {
-    const [x1, y1] = W[k], [x2, y2] = W[k + 1], len = Math.hypot(x2 - x1, y2 - y1) || 1e-9, nx = (-(y2 - y1) / len) * rad, ny = ((x2 - x1) / len) * rad;
-    shapes.push({ type: 'path', path: `M${x1 + nx},${y1 + ny} L${x2 + nx},${y2 + ny} L${x2 - nx},${y2 - ny} L${x1 - nx},${y1 - ny} Z`, ...sty });
-  }
-  W.forEach(([x, y]) => shapes.push({ type: 'circle', x0: x - rad, x1: x + rad, y0: y - rad, y1: y + rad, ...sty }));
-  S.setAnnotations(map, marks, { shapes });
+  const r = st.res, W = r.W;
+  if (map._g) map._g.redraw();
   const op = new Array(S.tracks.length).fill(W.length >= 2 ? S.DOT.fade : 1);
   r.pool.forEach(p => (op[p.j] = 1));
   r.picks.forEach(p => (op[p.j] = 1));
@@ -127,8 +132,7 @@ function drawMap() {
 function ringPicks(hoverJ) {
   const idxs = st.res.picks.filter(p => p.anchor == null).map(p => p.j);
   if (hoverJ != null) idxs.push(hoverJ);
-  S.highlight(map, idxs, H.space);
-  Plotly.restyle(map, { 'marker.size': [idxs.map((j, k) => (hoverJ != null && k === idxs.length - 1 ? 22 : 14))] }, [1]);
+  if (map._g) map._g.setRings(idxs.map((i, k) => ({ i, r: hoverJ != null && k === idxs.length - 1 ? 11 : 7, color: '#fff', width: 1.2 })));
 }
 function render() {
   st.res = compute();
@@ -196,14 +200,17 @@ function hitSegment(px, py) {
   }
   return -1;
 }
+// Stage drags are caught before the map sees the pointer (capture phase); everything else pans / zooms the map.
 let down = null;
-map.addEventListener('mousedown', e => {
-  if (e.button !== 0 || e.ctrlKey || !map._fullLayout) return;
+map.addEventListener('pointerdown', e => {
+  if (e.button !== 0 || e.ctrlKey || !map._g) return;
   const [px, py] = relPos(e), k = hitStage(px, py);
+  if (k < 0) return;
+  e.preventDefault(); e.stopPropagation();
   down = { px, py, moved: false };
-  if (k >= 0) { e.preventDefault(); e.stopPropagation(); drag = { k, x: null, y: null }; map.classList.add('dragging-stage'); }
+  drag = { k, x: null, y: null }; map.classList.add('dragging-stage');
 }, true);
-document.addEventListener('mousemove', e => {
+document.addEventListener('pointermove', e => {
   if (!down) return;
   const [px, py] = relPos(e);
   if (Math.hypot(px - down.px, py - down.py) > 4) down.moved = true;
@@ -212,29 +219,27 @@ document.addEventListener('mousemove', e => {
     if (!drag.raf) drag.raf = requestAnimationFrame(() => { if (drag) { drag.raf = 0; st.res = compute(); drawMap(); } });
   }
 }, true);
-document.addEventListener('mouseup', () => {
+document.addEventListener('pointerup', () => {
   if (!down) return;
-  const dd = down; down = null;
-  if (drag) {
-    const dr = drag; drag = null; map.classList.remove('dragging-stage');
-    if (dd.moved && dr.x != null) { const j = S.nearest(dr.x, dr.y, H.space); edit('op.move', f => (f.stages[dr.k] = j)); }
-    else { st.sel = st.sel === dr.k ? null : dr.k; render(); }
-    return;
-  }
-  if (dd.moved) return;   // that was a pan
-  const [x, y] = S.toData(map, dd.px, dd.py), j = S.nearest(x, y, H.space), seg = hitSegment(dd.px, dd.py);
+  const dd = down, dr = drag; down = null; drag = null; map.classList.remove('dragging-stage');
+  if (dd.moved && dr.x != null) { const j = S.nearest(dr.x, dr.y, H.space); edit('op.move', f => (f.stages[dr.k] = j)); }
+  else { st.sel = st.sel === dr.k ? null : dr.k; render(); }
+});
+// A tap (not a pan) adds a stage at the nearest track, or inserts one when it lands on the route.
+function tapMap(i, info) {
+  const [x, y] = info.data, j = i ?? S.nearest(x, y, H.space), seg = hitSegment(info.px, info.py);
   if (seg >= 0) edit('op.insert', f => f.stages.splice(seg + 1, 0, j));
   else edit('op.add', f => f.stages.push(j));
   st.sel = null;
-});
+}
 
 S.ready.then(() => {
   AVG_DUR = S.tracks.reduce((a, t) => a + t.dur, 0) / S.tracks.length;
-  S.plot(map, { space: H.space, colorMode: H.color, config: { doubleClick: false } }).then(() => {
-    map.on('plotly_hover', e => { const p = e.points.find(p => p.curveNumber === 0); if (p && e.event && e.event.altKey) H.player.audition(p.pointIndex); });
-    Plotly.restyle(map, { 'line.width': [12, 2.5] }, [2, 3]);
+  S.plot(map, { space: H.space, colorMode: H.color, flat: true, onTap: tapMap, onDoubleTap: tapMap }).then(gx => {
+    gx.addDraw(drawRoute);
     render();
-    S.splitter(document.getElementById('splitFlow'), { target: document.getElementById('bottom'), cssVar: '--flow-h', axis: 'y', sign: -1, min: 150, max: window.innerHeight - 200, key: 'summit.flow.h', onResize: () => Plotly.Plots.resize(map) });
+    S.splitter(document.getElementById('splitFlow'), { target: document.getElementById('bottom'), cssVar: '--flow-h', axis: 'y', sign: -1, min: 150, max: window.innerHeight - 200, key: 'summit.flow.h' });
+    H.registerView('flow', { save: () => ({}), load() {} });  // Back returns to Flow as you left it; edits have their own undo
   });
 });
 
@@ -277,8 +282,9 @@ document.getElementById('bottom').addEventListener('click', e => {
   const stg = e.target.closest('[data-stage]'); if (stg) { st.sel = +stg.dataset.stage === st.sel ? null : +stg.dataset.stage; render(); return; }
   const x = e.target.closest('[data-x]'); if (x) { const j = +x.dataset.x; edit('op.remove', f => f.excluded.push(j)); return; }
   if (e.target.id === 'playFlow') { playFrom(st.res.picks[0].j); return; }
-  const r = e.target.closest('[data-i]'); if (r) playFrom(+r.dataset.i);
+  const r = e.target.closest('[data-i]'); if (r && e.detail < 2) playFrom(+r.dataset.i);  // second click of a double-click: don't restart
 });
+document.getElementById('bottom').addEventListener('dblclick', e => { const r = e.target.closest('[data-i]'); if (r && !e.target.closest('button')) H.dblGoTo(e, +r.dataset.i); });
 document.getElementById('bottom').addEventListener('mouseover', e => { const r = e.target.closest('[data-i]'); ringPicks(r ? +r.dataset.i : null); });
 document.getElementById('bottom').addEventListener('mouseleave', () => ringPicks());
 document.addEventListener('keydown', e => {
@@ -318,7 +324,7 @@ pres.addEventListener('click', e => {
   const j = +r.dataset.i, L = S.layout(H.space);
   pal.classList.remove('on');
   edit('op.add', f => f.stages.push(j));
-  Plotly.relayout(map, { 'xaxis.range': [L.x[j] - 5, L.x[j] + 5], 'yaxis.range': [L.y[j] - 5, L.y[j] + 5] });
+  map._g.centerOn(j);
 });
 </script>
 </body>

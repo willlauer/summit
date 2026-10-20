@@ -152,6 +152,20 @@ def layout(log=print) -> None:
             con.execute("INSERT INTO clusters(space, cluster, family, label, label_source, styles, vibes) VALUES (?,?,?,?,?,?,?)",
                         (space, c, int(fam[m[0]]), kept, "user" if kept else "auto", "[]", "[]"))
         con.commit()
+    layout3d(con, ids, log)
     from .label import label
 
     label(log=log)
+
+
+def layout3d(con=None, ids=None, log=print) -> None:
+    """3D projection of each space (the map's 3D view). Positions only: families and sub-clusters come from the 2D run."""
+    con = con or db.connect()
+    ids = ids or analyzed_ids(con)
+    for space in SPACES:
+        xyz = _umap(space_matrix(con, space, ids), 3, 0.1)
+        xyz = (xyz - xyz.mean(0)) / np.abs(xyz - xyz.mean(0)).max() * 10
+        con.execute("DELETE FROM layouts3d WHERE space=?", (space,))
+        con.executemany("INSERT INTO layouts3d VALUES (?,?,?,?,?)", [(space, i, *map(float, p)) for i, p in zip(ids, xyz)])
+        con.commit()
+        log(f"  {space}: 3D layout")

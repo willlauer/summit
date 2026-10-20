@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Summit Tree</title>
+<link rel="stylesheet" href="/web/shared.css">
+<script src="/web/map.js"></script>
+<style>
+  /* layout only: components come from shared.css */
+  body { display: grid; grid-template-columns: var(--outline-w, 260px) 3px minmax(0, 1fr) 3px var(--pl-w, 340px); }
+  .side { display: flex; flex-direction: column; min-height: 0; }
+  .side .head { padding: 12px 14px 10px; border-bottom: 1px solid var(--line); }
+  .side .head h3 { margin-top: 0; }
+  .side .scroll { flex: 1; overflow: auto; min-height: 0; padding: 4px 8px 12px; }
+  #outline { border-right: 1px solid var(--line); }
+  #plside { border-left: 1px solid var(--line); }
+  .seed { position: relative; }
+  .seed input { width: 100%; }
+  .seedres { position: absolute; left: 0; right: 0; top: 100%; z-index: 30; max-height: 50vh; overflow: auto; padding: 4px; background: rgba(8, 6, 18, .98); border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(0, 0, 0, .6); }
+  .seedres:empty { display: none; }
+  .seedbtns { display: flex; gap: 6px; margin-top: 8px; }
+  .orow { display: flex; align-items: center; gap: 7px; padding: 3px 6px; cursor: pointer; font-size: 12px; white-space: nowrap; border-left: 2px solid transparent; }
+  .orow:hover { background: rgba(0, 240, 255, .07); }
+  .orow.focus { border-left-color: var(--yellow); background: rgba(252, 238, 10, .06); color: #fff; }
+  .orow.added { color: var(--muted); }
+  .orow.added .ok { color: var(--green); }
+  .orow .grow { overflow: hidden; text-overflow: ellipsis; }
+  .orow .lvl { color: var(--muted); font-size: 10px; width: 12px; text-align: center; flex: none; }
+
+  #stage { position: relative; overflow: hidden; min-width: 0; cursor: grab; touch-action: none; }
+  #stage.panning { cursor: grabbing; }
+  #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  #world.anim { transition: transform .28s cubic-bezier(.2, .7, .2, 1); }
+  .node { transition: transform .28s cubic-bezier(.2, .7, .2, 1), opacity .15s; }
+  #edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+  #edges path { fill: none; stroke-width: 1.5; opacity: .45; }
+  #edges path.hot { opacity: 1; stroke-width: 2.5; filter: drop-shadow(0 0 4px currentColor); }
+  .node { position: absolute; left: 0; top: 0; width: 240px; height: 58px; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 10px; cursor: pointer;
+    background: rgba(10, 8, 22, .94); border: 1px solid var(--line); border-left: 3px solid var(--c); clip-path: var(--chamfer-sm); user-select: none; }
+  .node:hover { border-color: var(--cyan); border-left-color: var(--c); background: rgba(16, 14, 34, .97); }
+  .node.focus { border-color: var(--yellow); border-left-color: var(--c); background: rgba(40, 36, 10, .97); }
+  .node.playing { background: rgba(40, 40, 60, .97); }
+  .node.playing .t::before { content: "▶ "; color: #fff; text-shadow: 0 0 8px #fff; }
+  .node.root { height: 64px; border-color: rgba(255, 42, 109, .6); }
+  .node.added { opacity: .42; }
+  .node.added:hover, .node.added.focus { opacity: .75; }
+  .node.flash { animation: flash .9s 2; }
+  @keyframes flash { 50% { background: rgba(252, 238, 10, .35); } }
+  .node .meta { flex: 1; min-width: 0; line-height: 1.3; }
+  .node .t { color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .node .a { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .node .f { color: var(--green); font-size: 10.5px; opacity: .8; }
+  .node .btns { display: flex; flex-direction: column; gap: 3px; flex: none; }
+  .node .btns button { width: 26px; height: 22px; padding: 0; font-size: 13px; letter-spacing: 0; clip-path: none; }
+  .node .add.on { color: var(--green); border-color: var(--green); background: rgba(5, 255, 161, .1); }
+  .node .add.on:hover { color: var(--magenta); border-color: var(--magenta); background: rgba(255, 42, 109, .12); box-shadow: none; }
+  .node .exp.on { color: var(--bg); background: var(--cyan); }
+  .node .kill { position: absolute; top: 1px; right: 34px; visibility: hidden; }
+  .node:hover .kill { visibility: visible; }
+  .more { position: absolute; left: 0; top: 0; width: 240px; height: 26px; padding: 0; font-size: 10px; clip-path: none; border-style: dashed; background: rgba(5, 4, 10, .8); }
+
+  .tools { top: 12px; left: 12px; padding: 7px 10px; }
+  .zoom { bottom: 12px; left: 12px; padding: 5px; display: flex; gap: 4px; }
+  .zoom button { padding: 5px 9px; }
+  .stagehint { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; text-align: center; }
+  .stagehint .empty { max-width: 380px; line-height: 1.7; }
+  .note { position: absolute; right: 12px; bottom: 12px; max-width: 320px; padding: 12px 14px; font-size: 12px; color: var(--muted); }
+
+  #plside select { width: 100%; }
+  #plside .stats { margin-top: 10px; }
+  #plside.droptarget { box-shadow: inset 0 0 0 2px var(--yellow); }
+  #plside .row.inTree .grow::after { content: " ⌖"; color: var(--muted); }
+</style>
+</head>
+<body>
+<aside class="side surface" id="outline">
+  <div class="head">
+    <h3 data-i18n="treeSeed">Start from a song</h3>
+    <div class="seed"><input id="seedq" data-i18n-ph="treeSeedPh" autocomplete="off" spellcheck="false"><div class="seedres" id="seedres"></div></div>
+    <div class="seedbtns"><button class="small" id="seedNow" data-i18n="treeNowPlaying">＋ Now playing</button><button class="small ghost" id="clearTree" data-i18n="treeClear">Clear tree</button></div>
+  </div>
+  <div class="scroll" id="olist"></div>
+</aside>
+<div class="split-x" id="splitL"></div>
+<main id="stage" class="mapbg">
+  <svg id="edges"></svg>
+  <div id="world"></div>
+  <div class="float tools toolbar">
+    <label data-i18n-title="treeBranchTip"><span data-i18n="treeBranch">Branch</span></label>
+    <span class="seg" id="branch"><button data-v="5">5</button><button data-v="8">8</button><button data-v="12">12</button></span>
+  </div>
+  <div class="float zoom"><button class="ghost" data-z="out" title="−">−</button><button class="ghost" data-z="fit" data-i18n="treeFit">Fit</button><button class="ghost" data-z="in" title="+">+</button></div>
+  <div class="stagehint" id="stagehint"></div>
+  <div class="note frame help" data-i18n-html="treeHelp"></div>
+</main>
+<div class="split-x" id="splitR"></div>
+<aside class="side surface" id="plside">
+  <div class="head" id="plhead"></div>
+  <div class="scroll" id="plrows"></div>
+</aside>
+
+<script>
+// Tree: grow a playlist by walking "sounds like". Each node is a track; opening it lays out its most similar tracks as the next
+// level (minus its ancestors). Any number of nodes per level can be opened and added. The tree, its playlist and the camera
+// are remembered in this browser; the playlist itself is an ordinary saved playlist.
+const H = S.H, t_ = H.t, stage = document.getElementById('stage'), world = document.getElementById('world'), edges = document.getElementById('edges');
+const W = 240, NH = 58, RH = 64, COL = 300, GAP = 10, MORE = 26;
+const st = { nodes: {}, roots: [], seq: 1, focus: null, branch: 8, plId: null, cam: { x: 40, y: 40, s: 1 } };
+const els = {};          // node id → card element
+let pos = {};            // node id → {x, y} from the last layout
+
+// ---- persistence (this browser only; the playlist is saved on the server) ----
+const KEY = 'summit.tree';
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify({ nodes: st.nodes, roots: st.roots, seq: st.seq, focus: st.focus, branch: st.branch, plId: st.plId, cam: st.cam })); } catch (e) {}
+}
+function restore() {
+  try { Object.assign(st, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) {}
+  const ok = n => n && S.tracks[n.i] && S.tracks[n.i].id === n.tid;  // the library may have been re-laid out since
+  for (const [id, n] of Object.entries(st.nodes)) if (!ok(n)) delete st.nodes[id];
+  for (const n of Object.values(st.nodes)) n.kids = n.kids.filter(k => st.nodes[k]);
+  st.roots = st.roots.filter(r => st.nodes[r]);
+  if (!st.nodes[st.focus]) st.focus = null;
+  if (!playlist()) st.plId = null;
+}
+
+// ---- tree model ----
+const node = id => st.nodes[id];
+function mk(i, parent) {
+  const id = 'n' + st.seq++;
+  st.nodes[id] = { id, i, tid: S.tracks[i].id, parent, kids: [], open: false, depth: parent ? node(parent).depth + 1 : 0 };
+  return id;
+}
+const ancestors = id => { const out = []; for (let n = node(id); n; n = node(n.parent)) out.push(n.i); return out; };
+async function expand(id, more = 0) {
+  const n = node(id);
+  if (!n.kids.length || more) {
+    const skip = new Set(ancestors(id)), have = new Set(n.kids.map(k => node(k).i)), want = n.kids.length + (more || st.branch);
+    const nb = await H.neighbors(n.i, want + skip.size);
+    nb.filter(j => !skip.has(j) && !have.has(j)).slice(0, want - n.kids.length).forEach(j => n.kids.push(mk(j, id)));
+  }
+  n.open = true;
+  render();
+  reveal(id);
+}
+function collapse(id) { node(id).open = false; render(); }
+function removeNode(id) {
+  const n = node(id), drop = x => { node(x).kids.forEach(drop); delete st.nodes[x]; };
+  if (n.parent) node(n.parent).kids = node(n.parent).kids.filter(k => k !== id); else st.roots = st.roots.filter(r => r !== id);
+  if (isUnder(st.focus, id)) st.focus = n.parent;
+  drop(id);
+  render();
+}
+function isUnder(x, top) { for (let n = node(x); n; n = node(n.parent)) if (n.id === top) return true; return false; }
+async function addRoot(i) {
+  const id = mk(i, null);
+  st.roots.push(id);
+  st.focus = id;
+  await expand(id);
+}
+// Depth-first order of what's on screen (children of closed nodes are kept but hidden).
+function visible() {
+  const out = [], walk = id => { out.push(id); const n = node(id); if (n.open) n.kids.forEach(walk); };
+  st.roots.forEach(walk);
+  return out;
+}
+
+// ---- playlist ----
+const playlist = () => S.data.playlists.find(p => p.id === st.plId && p.kind === 'playlist');
+const inPl = i => { const p = playlist(); return !!p && p.ids.includes(S.tracks[i].id); };
+async function ensurePlaylist() {
+  if (playlist()) return playlist();
+  const n = prompt(t_('playlistName'), t_('newPlaylist')); if (!n) return null;
+  const r = await H.createPlaylist(n, []);
+  st.plId = r.id; save();
+  return playlist();
+}
+async function toggleAdd(i, at) {
+  const p = await ensurePlaylist(); if (!p) return;
+  const id = S.tracks[i].id;
+  if (p.ids.includes(id)) { await H.removeFromPlaylist(p.id, id); return; }
+  await H.editPlaylist(p.id, ids => { ids = ids.filter(x => x !== id); ids.splice(Math.min(at ?? ids.length, ids.length), 0, id); return ids; });
+}
+
+// ---- layout: levels left → right; each leaf takes a row, parents centre on their children ----
+function layout() {
+  pos = {};
+  let y = 0;
+  const place = (id, x) => {
+    const n = node(id), h = n.depth ? NH : RH;
+    if (n.open && n.kids.length) {
+      n.kids.forEach(k => place(k, x + COL));
+      const first = pos[n.kids[0]], last = pos[n.kids[n.kids.length - 1]];
+      pos[id] = { x, y: (first.y + last.y + NH) / 2 - h / 2, h };
+      y += MORE + GAP;  // the "more like this" button under the last child
+    } else { pos[id] = { x, y, h }; y += h + GAP; }
+  };
+  st.roots.forEach(r => { place(r, 0); y += 40; });
+}
+
+// ---- rendering ----
+function cardHTML(id) {
+  const n = node(id), t = S.tracks[n.i];
+  return `<div class="meta"><div class="t">${S.esc(t.title)}</div><div class="a">${S.esc(t.artist)}</div><div class="f">${t.bpm ?? '—'} BPM · ${S.esc(t.key ?? '—')} · ${S.fmtDur(t.dur)}</div></div>
+    <button class="bare kill" data-act="kill" title="${t_('treeRemove')}">×</button>
+    <div class="btns"><button class="add" data-act="add"></button><button class="exp" data-act="exp"></button></div>`;
+}
+function render() {
+  layout();
+  const vis = visible(), live = new Set(vis), cur = H.player.current;
+  for (const id of Object.keys(els)) if (!live.has(id)) { els[id].remove(); delete els[id]; }
+  world.querySelectorAll('.more').forEach(b => b.remove());
+  for (const id of vis) {
+    const n = node(id), t = S.tracks[n.i], p = pos[id];
+    let el = els[id];
+    if (!el) {
+      el = els[id] = document.createElement('div');
+      el.className = 'node'; el.dataset.id = id; el.draggable = true;
+      el.style.setProperty('--c', S.col(t.cluster));
+      el.innerHTML = cardHTML(id);
+      const from = pos[n.parent];  // grow out of the parent
+      el.style.transform = from ? `translate(${from.x}px, ${from.y}px)` : `translate(${p.x}px, ${p.y}px)`;
+      world.appendChild(el);
+      el.getBoundingClientRect();
+    }
+    el.style.transform = `translate(${p.x}px, ${p.y}px)`;
+    const added = inPl(n.i);
+    el.classList.toggle('root', !n.parent);
+    el.classList.toggle('added', added);
+    el.classList.toggle('focus', id === st.focus);
+    el.classList.toggle('playing', n.i === cur);
+    el.title = t_('treeCardTip');
+    const add = el.querySelector('.add'), exp = el.querySelector('.exp');
+    add.classList.toggle('on', added); add.textContent = added ? '✓' : '＋'; add.title = t_(added ? 'removeFromPl' : 'treeAdd');
+    exp.classList.toggle('on', n.open); exp.textContent = n.open ? '‹' : '›'; exp.title = t_(n.open ? 'treeCollapse' : 'treeExpand');
+    if (n.open) {
+      const last = pos[n.kids[n.kids.length - 1]];
+      if (last) {
+        const b = document.createElement('button');
+        b.className = 'more ghost'; b.dataset.act = 'more'; b.dataset.id = id; b.textContent = t_('treeMore');
+        b.style.transform = `translate(${last.x}px, ${last.y + NH + GAP / 2}px)`;
+        world.appendChild(b);
+      }
+    }
+  }
+  drawEdges(vis);
+  renderOutline(vis);
+  renderPlaylist();
+  document.getElementById('stagehint').innerHTML = vis.length ? '' : `<div class="empty">${t_('treeEmpty')}</div>`;
+  document.querySelectorAll('#branch button').forEach(b => b.classList.toggle('on', +b.dataset.v === st.branch));
+  save();
+}
+function drawEdges(vis) {
+  const hot = new Set(); for (let n = node(st.focus); n; n = node(n.parent)) hot.add(n.id);
+  edges.innerHTML = vis.filter(id => node(id).parent).map(id => {
+    const n = node(id), a = pos[n.parent], b = pos[id], x1 = a.x + W, y1 = a.y + a.h / 2, x2 = b.x, y2 = b.y + NH / 2, mx = (x1 + x2) / 2;
+    const c = S.col(S.tracks[n.i].cluster);
+    return `<path class="${hot.has(id) ? 'hot' : ''}" style="color:${c}" stroke="${c}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>`;
+  }).join('');
+}
+function renderOutline(vis) {
+  document.getElementById('olist').innerHTML = vis.map(id => {
+    const n = node(id), t = S.tracks[n.i], added = inPl(n.i);
+    return `<div class="orow${id === st.focus ? ' focus' : ''}${added ? ' added' : ''}" data-id="${id}" style="padding-left:${6 + n.depth * 14}px" title="${t_('treeJumpTip')}">
+      <span class="lvl">${n.kids.length ? (n.open ? '▾' : '▸') : '·'}</span><span class="dot" style="--c:${S.col(t.cluster)}"></span>
+      <span class="grow">${S.esc(t.title)} <span class="muted">· ${S.esc(t.artist)}</span></span>${added ? '<span class="ok">✓</span>' : ''}</div>`;
+  }).join('') || `<div class="empty">${t_('treeOutlineEmpty')}</div>`;
+}
+
+// ---- playlist sidebar ----
+function renderPlaylist() {
+  const pls = S.data.playlists.filter(p => p.kind === 'playlist'), p = playlist();
+  const list = p ? H.playlistTracks(p) : [], dur = list.reduce((a, j) => a + S.tracks[j].dur, 0), inTree = new Set(visible().map(id => node(id).i));
+  const bpms = list.map(j => S.tracks[j].bpm).filter(Boolean).sort((a, b) => a - b);
+  document.getElementById('plhead').innerHTML = `<h3>${t_('treePlaylist')}</h3>
+    <select id="plsel"><option value="">${t_('treePickPl')}</option>${pls.map(x => `<option value="${x.id}" ${p && x.id === p.id ? 'selected' : ''}>${S.esc(x.name)} (${x.ids.length})</option>`).join('')}<option value="new">${t_('newPlaylistDots')}</option></select>
+    ${p ? `<div class="stats"><div class="stat"><b>${list.length}</b><span>${t_('tracks')}</span></div><div class="stat"><b>${S.fmtDur(dur)}</b><span>${t_('length')}</span></div>
+      ${bpms.length ? `<div class="stat"><b>${bpms[0]}–${bpms[bpms.length - 1]}</b><span>BPM</span></div>` : ''}</div>
+      <div class="actions"><button class="primary small" data-act="playall" ${list.length ? '' : 'disabled'}>${t_('playAll')}</button></div>` : ''}`;
+  document.getElementById('plrows').innerHTML = !p ? `<div class="empty">${t_('treeNoPl')}</div>` : !list.length ? `<div class="empty">${t_('treePlEmpty')}</div>`
+    : list.map((j, k) => { const t = S.tracks[j]; return `<div class="row${H.player.current === j ? ' playing' : ''}${inTree.has(j) ? ' inTree' : ''}" draggable="true" data-i="${j}" data-pos="${k}" title="${t_('treePlRowTip')}">
+        <span class="muted small" style="width:18px;text-align:right">${k + 1}</span><span class="dot" style="--c:${S.col(t.cluster)}"></span>
+        <span class="grow">${S.esc(t.title)} <span class="muted">· ${S.esc(t.artist)}</span></span><span class="muted small">${t.bpm ?? ''}</span>${S.heart(j)}<button class="bare rm" data-act="plrm" data-i="${j}" title="${t_('removeFromPl')}">×</button></div>`; }).join('');
+}
+
+// ---- camera: drag the background to pan, scroll to pan, pinch / ⌘-scroll to zoom ----
+function applyCam(anim) {
+  world.classList.toggle('anim', !!anim);
+  const { x, y, s } = st.cam, tf = `translate(${x}px, ${y}px) scale(${s})`;
+  world.style.transform = tf; edges.style.transform = tf; edges.style.transformOrigin = '0 0';
+  edges.style.transition = anim ? 'transform .28s cubic-bezier(.2, .7, .2, 1)' : '';
+}
+function zoomAt(f, cx, cy, anim) {
+  const s = Math.max(0.2, Math.min(2.5, st.cam.s * f)), k = s / st.cam.s;
+  st.cam = { x: cx - (cx - st.cam.x) * k, y: cy - (cy - st.cam.y) * k, s };
+  applyCam(anim); save();
+}
+function bounds(ids) {
+  const ps = ids.map(id => pos[id]).filter(Boolean);
+  if (!ps.length) return null;
+  return { x0: Math.min(...ps.map(p => p.x)), y0: Math.min(...ps.map(p => p.y)), x1: Math.max(...ps.map(p => p.x + W)), y1: Math.max(...ps.map(p => p.y + p.h)) };
+}
+function fit(ids = visible()) {
+  const b = bounds(ids); if (!b) return;
+  const r = stage.getBoundingClientRect(), pad = 60;
+  const s = Math.max(0.2, Math.min(1.2, (r.width - pad * 2) / (b.x1 - b.x0), (r.height - pad * 2) / (b.y1 - b.y0)));
+  st.cam = { s, x: (r.width - (b.x1 - b.x0) * s) / 2 - b.x0 * s, y: (r.height - (b.y1 - b.y0) * s) / 2 - b.y0 * s };
+  applyCam(true); save();
+}
+// Keep a node and its children in view after opening it, moving the camera as little as possible.
+function reveal(id) {
+  const n = node(id), b = bounds([id, ...(n.open ? n.kids : [])]); if (!b) return;
+  const r = stage.getBoundingClientRect(), pad = 40, { s } = st.cam;
+  const vx0 = b.x0 * s + st.cam.x, vx1 = b.x1 * s + st.cam.x, vy0 = b.y0 * s + st.cam.y, vy1 = b.y1 * s + st.cam.y;
+  let dx = 0, dy = 0;
+  if (vx1 > r.width - pad) dx = r.width - pad - vx1;
+  if (vx0 + dx < pad) dx = pad - vx0;
+  if (vy1 > r.height - pad) dy = r.height - pad - vy1;
+  if (vy0 + dy < pad) dy = pad - vy0;
+  if (dx || dy) { st.cam.x += dx; st.cam.y += dy; applyCam(true); save(); }
+}
+// Jump: centre a node (from the outline, the playlist, Back / Forward).
+function centre(id, flash = true) {
+  const p = pos[id]; if (!p) return;
+  const r = stage.getBoundingClientRect(), s = Math.max(st.cam.s, 0.8);
+  st.cam = { s, x: r.width / 2 - (p.x + W / 2) * s, y: r.height / 2 - (p.y + p.h / 2) * s };
+  applyCam(true); save();
+  if (flash && els[id]) { els[id].classList.remove('flash'); els[id].getBoundingClientRect(); els[id].classList.add('flash'); }
+}
+function setFocus(id, jump) {
+  st.focus = id;
+  render();
+  if (jump) centre(id);
+}
+
+let pan = null;
+stage.addEventListener('pointerdown', e => {
+  if (e.button !== 0 || e.target.closest('.node, .float, button')) return;
+  pan = { x: e.clientX, y: e.clientY, cx: st.cam.x, cy: st.cam.y, id: e.pointerId };
+  stage.setPointerCapture(e.pointerId); stage.classList.add('panning');
+});
+stage.addEventListener('pointermove', e => {
+  if (!pan) return;
+  st.cam.x = pan.cx + e.clientX - pan.x; st.cam.y = pan.cy + e.clientY - pan.y; applyCam(false);
+});
+const endPan = () => { if (pan) { pan = null; stage.classList.remove('panning'); save(); } };
+stage.addEventListener('pointerup', endPan); stage.addEventListener('pointercancel', endPan);
+stage.addEventListener('wheel', e => {
+  e.preventDefault();
+  const r = stage.getBoundingClientRect();
+  if (e.ctrlKey || e.metaKey) zoomAt(Math.exp(-Math.max(-25, Math.min(25, e.deltaY)) * 0.01), e.clientX - r.left, e.clientY - r.top);  // pinch arrives as ctrl+wheel
+  else { st.cam.x -= e.shiftKey ? e.deltaY : e.deltaX; st.cam.y -= e.shiftKey ? 0 : e.deltaY; applyCam(false); save(); }
+}, { passive: false });
+document.querySelector('.zoom').onclick = e => {
+  const z = e.target.closest('[data-z]'); if (!z) return;
+  const r = stage.getBoundingClientRect();
+  if (z.dataset.z === 'fit') fit(); else zoomAt(z.dataset.z === 'in' ? 1.25 : 0.8, r.width / 2, r.height / 2, true);
+};
+new ResizeObserver(() => applyCam(false)).observe(stage);
+
+// ---- card interactions: click plays its level, ＋ adds, › opens similar, double-click goes to the map ----
+const levelOf = id => { const n = node(id); return n.parent ? node(n.parent).kids.map(k => node(k).i) : [n.i]; };
+world.addEventListener('click', async e => {
+  const b = e.target.closest('[data-act]'), card = e.target.closest('.node');
+  try {
+    if (b && b.dataset.act === 'more') { st.focus = b.dataset.id; await expand(b.dataset.id, st.branch); return; }
+    if (!card) return;
+    const id = card.dataset.id, n = node(id);
+    if (b && b.dataset.act === 'add') { st.focus = id; await toggleAdd(n.i); return; }
+    if (b && b.dataset.act === 'exp') { st.focus = id; n.open ? collapse(id) : await expand(id); return; }
+    if (b && b.dataset.act === 'kill') { H.navPush(); removeNode(id); return; }
+    if (e.detail > 1) return;  // second click of a double-click
+    st.focus = id;
+    H.player.play(n.i, { queue: levelOf(id), label: n.parent ? H.t('similarTo', { x: S.tracks[node(n.parent).i].title }) : t_('mode.tree') });
+    render();
+  } catch (err) { S.toast(err.message); }
+});
+world.addEventListener('dblclick', e => { const c = e.target.closest('.node'); if (c && !e.target.closest('button')) H.dblGoTo(e, node(c.dataset.id).i); });
+
+// Keyboard: arrows walk the tree, → / ← open and close, Enter or A adds.
+document.addEventListener('keydown', async e => {
+  if (e.target.closest('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || !st.focus) return;
+  const n = node(st.focus), sibs = n.parent ? node(n.parent).kids : st.roots, k = sibs.indexOf(n.id);
+  let go = null;
+  try {
+    if (e.key === 'ArrowDown') go = sibs[k + 1];
+    else if (e.key === 'ArrowUp') go = sibs[k - 1];
+    else if (e.key === 'ArrowRight') { if (!n.open) await expand(n.id); else go = n.kids[0]; }
+    else if (e.key === 'ArrowLeft') { if (n.open) collapse(n.id); else go = n.parent; }
+    else if (e.key === 'Enter' || e.key === 'a') await toggleAdd(n.i);
+    else if (e.key === 'p') H.player.play(n.i, { queue: levelOf(n.id) });
+    else return;
+  } catch (err) { S.toast(err.message); }
+  e.preventDefault();
+  if (go) { setFocus(go); reveal(go); }
+});
+
+// ---- drag a card onto the playlist (drop where it should go); drag playlist rows to reorder ----
+const plside = document.getElementById('plside'), plrows = document.getElementById('plrows');
+let drag = null;  // { i, from: 'tree' | pos }
+world.addEventListener('dragstart', e => {
+  const c = e.target.closest('.node'); if (!c) return;
+  drag = { i: node(c.dataset.id).i, from: 'tree' };
+  e.dataTransfer.effectAllowed = 'copy'; e.dataTransfer.setData('text/plain', S.tracks[drag.i].title);
+});
+plrows.addEventListener('dragstart', e => {
+  const r = e.target.closest('.row[data-pos]'); if (!r) return;
+  drag = { i: +r.dataset.i, from: +r.dataset.pos }; r.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', r.dataset.i);
+});
+const dropMarks = () => plrows.querySelectorAll('.drop-before, .drop-after').forEach(r => r.classList.remove('drop-before', 'drop-after'));
+function dropAt(e) {  // insertion index under the pointer
+  const rows = [...plrows.querySelectorAll('.row[data-pos]')];
+  for (const r of rows) { const b = r.getBoundingClientRect(); if (e.clientY < b.top + b.height / 2) return { at: +r.dataset.pos, row: r, before: true }; }
+  const last = rows[rows.length - 1];
+  return { at: rows.length, row: last, before: false };
+}
+plside.addEventListener('dragover', e => {
+  if (!drag) return;
+  e.preventDefault();
+  plside.classList.add('droptarget');
+  const d = dropAt(e); dropMarks();
+  if (d.row) d.row.classList.add(d.before ? 'drop-before' : 'drop-after');
+});
+plside.addEventListener('dragleave', e => { if (!plside.contains(e.relatedTarget)) { plside.classList.remove('droptarget'); dropMarks(); } });
+plside.addEventListener('drop', async e => {
+  if (!drag) return;
+  e.preventDefault();
+  const { at } = dropAt(e), d = drag;
+  try {
+    if (d.from === 'tree') {
+      const p = await ensurePlaylist(); if (!p) return;
+      const id = S.tracks[d.i].id, ids = p.ids.slice(), old = ids.indexOf(id);
+      if (old >= 0) ids.splice(old, 1);
+      ids.splice(old >= 0 && old < at ? at - 1 : at, 0, id);
+      await H.setPlaylistIds(p.id, ids);
+    } else {
+      const p = playlist(), order = H.playlistTracks(p), [moved] = order.splice(d.from, 1);
+      order.splice(at > d.from ? at - 1 : at, 0, moved);
+      const offMap = p.ids.filter(id => S.data.byId[id] == null);  // tracks not on the map keep their place at the end
+      await H.setPlaylistIds(p.id, order.map(j => S.tracks[j].id).concat(offMap));
+    }
+  } catch (err) { S.toast(err.message); }
+});
+document.addEventListener('dragend', () => { drag = null; plside.classList.remove('droptarget'); dropMarks(); plrows.querySelectorAll('.dragging').forEach(r => r.classList.remove('dragging')); });
+
+plside.addEventListener('change', async e => {
+  if (e.target.id !== 'plsel') return;
+  const v = e.target.value;
+  if (v === 'new') {
+    const n = prompt(t_('playlistName'), t_('newPlaylist'));
+    if (n) { try { st.plId = (await H.createPlaylist(n, [])).id; } catch (err) { S.toast(err.message); } }
+  } else st.plId = v ? +v : null;
+  render();
+});
+plside.addEventListener('click', async e => {
+  const b = e.target.closest('[data-act]'), r = e.target.closest('.row[data-i]'), p = playlist();
+  try {
+    if (b && b.dataset.act === 'plrm') { await H.removeFromPlaylist(p.id, S.tracks[+b.dataset.i].id); return; }
+    if (b && b.dataset.act === 'playall') { const q = H.playlistTracks(p); H.player.play(q[0], { queue: q, label: p.name }); return; }
+    if (r && e.detail === 1) {  // play from here; jump to it in the tree when it's there
+      const j = +r.dataset.i, q = H.playlistTracks(p);
+      H.player.play(j, { queue: q, label: p.name });
+      const id = visible().find(x => node(x).i === j);
+      if (id) setFocus(id, true);
+    }
+  } catch (err) { S.toast(err.message); }
+});
+plrows.addEventListener('dblclick', e => { const r = e.target.closest('.row[data-i]'); if (r && !e.target.closest('button')) H.dblGoTo(e, +r.dataset.i); });
+
+// ---- outline: click jumps to the node ----
+document.getElementById('olist').addEventListener('click', e => {
+  const r = e.target.closest('.orow'); if (!r) return;
+  H.navPush(); setFocus(r.dataset.id, true);
+});
+document.getElementById('olist').addEventListener('dblclick', e => { const r = e.target.closest('.orow'); if (r) H.dblGoTo(e, node(r.dataset.id).i); });
+
+// ---- seeds: search, or the track that's playing ----
+const seedq = document.getElementById('seedq'), seedres = document.getElementById('seedres');
+let seedSeq = 0;
+seedq.addEventListener('input', () => {
+  clearTimeout(seedq._t);
+  seedq._t = setTimeout(async () => {
+    const q = seedq.value.trim(), seq = ++seedSeq;
+    if (!q) { seedres.innerHTML = ''; return; }
+    const res = await H.find(q).catch(() => []);
+    if (seq !== seedSeq) return;
+    seedres.innerHTML = res.slice(0, 15).map(r => { const t = S.tracks[r.i]; return `<div class="row" data-i="${r.i}"><span class="dot" style="--c:${S.col(t.cluster)}"></span><span class="grow">${S.esc(t.title)} <span class="muted">· ${S.esc(t.artist)}</span></span><span class="muted small">${t.bpm ?? ''}</span></div>`; }).join('');
+  }, 220);
+});
+seedq.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { seedq.value = ''; seedres.innerHTML = ''; seedq.blur(); }
+  if (e.key === 'Enter') { const r = seedres.querySelector('.row'); if (r) r.click(); }
+});
+seedres.addEventListener('click', async e => {
+  const r = e.target.closest('.row[data-i]'); if (!r) return;
+  seedq.value = ''; seedres.innerHTML = '';
+  H.navPush(); await plant(+r.dataset.i);
+});
+document.addEventListener('mousedown', e => { if (!e.target.closest('.seed')) seedres.innerHTML = ''; });
+document.getElementById('seedNow').onclick = async () => {
+  if (H.player.current == null) { S.toast(t_('treeNothingPlaying')); return; }
+  H.navPush(); await plant(H.player.current);
+};
+document.getElementById('clearTree').onclick = () => {
+  if (!st.roots.length || !confirm(t_('treeClearConfirm'))) return;
+  H.navPush();
+  st.nodes = {}; st.roots = []; st.focus = null; render();
+};
+// A new tree goes below the existing ones; the camera follows it.
+async function plant(i) {
+  await addRoot(i);
+  centre(st.focus, false);
+  reveal(st.focus);
+}
+
+document.getElementById('branch').onclick = e => { const b = e.target.closest('button'); if (b) { st.branch = +b.dataset.v; render(); } };
+
+// ---- splitters, shared events, Back / Forward ----
+S.splitter(document.getElementById('splitL'), { target: document.getElementById('outline'), cssVar: '--outline-w', min: 180, max: 520, key: 'summit.tree.outline' });
+S.splitter(document.getElementById('splitR'), { target: plside, cssVar: '--pl-w', sign: -1, min: 260, max: 640, key: 'summit.tree.pl' });
+H.on('playlists', render);
+H.on('player', i => {
+  Object.entries(els).forEach(([id, el]) => el.classList.toggle('playing', node(id).i === i));
+  plrows.querySelectorAll('.row[data-i]').forEach(r => r.classList.toggle('playing', +r.dataset.i === i));
+});
+H.on('lang', render);
+H.on('space', () => { Object.values(els).forEach(el => el.style.setProperty('--c', S.col(S.tracks[node(el.dataset.id).i].cluster))); render(); });
+
+S.ready.then(() => {
+  restore();
+  applyCam(false);
+  render();
+  H.registerView('tree', {
+    save: () => ({ nodes: st.nodes, roots: st.roots, focus: st.focus, cam: st.cam }),
+    load(v) { Object.assign(st, JSON.parse(JSON.stringify(v))); applyCam(true); render(); },
+    plant,  // H.explore: start a tree from a track in another mode
+  });
+});
+</script>
+</body>
+</html>

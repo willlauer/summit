@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS layouts (
   space TEXT, track_id TEXT, x REAL, y REAL, cluster INTEGER,
   PRIMARY KEY (space, track_id)
 );
+CREATE TABLE IF NOT EXISTS layouts3d (  -- the same space projected to 3D, for the galaxy view
+  space TEXT, track_id TEXT, x REAL, y REAL, z REAL,
+  PRIMARY KEY (space, track_id)
+);
 CREATE TABLE IF NOT EXISTS clusters (
   space TEXT, cluster INTEGER, label TEXT, label_source TEXT DEFAULT 'auto', styles TEXT, vibes TEXT,
   PRIMARY KEY (space, cluster)
@@ -74,6 +78,18 @@ def migrate(con: sqlite3.Connection) -> None:
     if not con.execute("SELECT 1 FROM sqlite_master WHERE name='likes'").fetchone():
         con.execute("CREATE TABLE likes (track_id TEXT PRIMARY KEY, created_at REAL)")
         con.commit()
+    # Files scan rejected (not tracks) and tracks analyze couldn't decode: remembered so they don't count as pending forever.
+    if not con.execute("SELECT 1 FROM sqlite_master WHERE name='skipped'").fetchone():
+        con.execute("CREATE TABLE skipped (path TEXT PRIMARY KEY, size INTEGER, mtime REAL)")
+        con.execute("CREATE TABLE failures (track_id TEXT PRIMARY KEY, error TEXT, at REAL)")
+        con.commit()
+    if not con.execute("SELECT 1 FROM sqlite_master WHERE name='layouts3d'").fetchone():
+        con.execute("CREATE TABLE layouts3d (space TEXT, track_id TEXT, x REAL, y REAL, z REAL, PRIMARY KEY (space, track_id))")
+        con.commit()
+    # Optimistic concurrency for playlists edited from two devices: every write bumps the version.
+    if "version" not in {r[1] for r in con.execute("PRAGMA table_info(playlists)")}:
+        con.execute("ALTER TABLE playlists ADD COLUMN version INTEGER DEFAULT 0")
+        con.commit()
     for table in ("layouts", "clusters"):
         cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
         if "family" not in cols:
@@ -96,8 +112,9 @@ def seed_tags(con: sqlite3.Connection) -> None:
 
 def purge(con: sqlite3.Connection, ids: list[str]) -> None:
     """Remove tracks and everything derived from them."""
-    for table, col in (("vectors", "track_id"), ("clap_windows", "track_id"), ("layouts", "track_id"),
-                       ("track_tags", "track_id"), ("playlist_tracks", "track_id"), ("likes", "track_id"), ("tracks", "id")):
+    for table, col in (("vectors", "track_id"), ("clap_windows", "track_id"), ("layouts", "track_id"), ("layouts3d", "track_id"),
+                       ("track_tags", "track_id"), ("playlist_tracks", "track_id"), ("likes", "track_id"), ("failures", "track_id"),
+                       ("tracks", "id")):
         con.executemany(f"DELETE FROM {table} WHERE {col}=?", [(i,) for i in ids])
 
 

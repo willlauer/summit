@@ -1,5 +1,6 @@
 """Step 5 backend: FastAPI over the SQLite store. Serves the library, audio (Range-capable), search, tags,
-clusters, playlists, vibes and export. The web UI lives in web/ and is served from the same origin."""
+clusters, playlists, vibes and export. The desktop UI lives in web/ (same origin); the Android app (android/) uses the
+same API, plus /stream (phone-friendly audio) and /art (cover art)."""
 
 import json
 import threading
@@ -13,6 +14,9 @@ from . import clap_text, db
 from .config import DEFAULT_SPACE, MAX_DURATION, SPACES, TAG_SPACE, WEB
 from .export import export_all
 from .layout import load, space_matrix, unit
+from .media import TYPES, Prefetch, art_file, stream_file
+from .pipeline import Job
+from .scan import pending
 from .tags import MIN_TRAIN, trained, zero_shot
 
 
@@ -71,7 +75,8 @@ class Library:
             return 1 / (1 + np.exp(-1.6 * (z - 1.0)))
         return np.zeros(len(self.ids))
 
-    def payload(self) -> dict:
+    def payload(self, lite: bool = False) -> dict:
+        """lite (the phone): no tag scores or Discogs styles, which are most of the size."""
         with self.lock:
             con = self.con
             tags = {}
@@ -85,7 +90,8 @@ class Library:
                 tracks.append({
                     "id": i, "artist": r["artist"], "title": r["title"], "album": r["album"], "dur": round(r["duration"] or 0),
                     "ext": r["format"], "bpm": round(r["bpm"]) if r["bpm"] else None, "key": r["key"], "audition": r["audition"] or 0,
-                    "styles": self.styles[k], "liked": i in liked_set, **tags.get(i, {"confirmed": [], "rejected": []}),
+                    "liked": i in liked_set, "added": round(r["added_at"] or 0),
+                    **({} if lite else {"styles": self.styles[k], **tags.get(i, {"confirmed": [], "rejected": []})}),
                 })
             spaces, clusters, families = {}, {}, {}
             group = lambda r, key: {"id": r[key], "label": r["label"], "src": r["label_source"],
@@ -97,6 +103,9 @@ class Library:
                         "x": [round(pts[i]["x"], 3) for i in self.ids], "y": [round(pts[i]["y"], 3) for i in self.ids],
                         "c": [pts[i]["cluster"] for i in self.ids], "f": [pts[i]["family"] for i in self.ids],
                     }
+                    p3 = {r["track_id"]: r for r in con.execute("SELECT * FROM layouts3d WHERE space=?", (s,))}
+                    if p3 and all(i in p3 for i in self.ids):
+                        spaces[s]["xyz"] = [[round(p3[i][a], 3) for i in self.ids] for a in "xyz"]
                     clusters[s] = [group(r, "cluster") | {"family": r["family"]}
                                    for r in con.execute("SELECT * FROM clusters WHERE space=? ORDER BY cluster", (s,))]
                     families[s] = [group(r, "family") for r in con.execute("SELECT * FROM families WHERE space=? ORDER BY family", (s,))]
@@ -104,7 +113,7 @@ class Library:
                 "tracks": tracks, "spaces": spaces, "clusters": clusters, "families": families,
                 "spaceList": [{"key": k, "label": v["label"]} for k, v in SPACES.items() if k in spaces], "defaultSpace": DEFAULT_SPACE,
                 "tags": [dict(r) for r in con.execute("SELECT name, category FROM tags ORDER BY id")],
-                "scores": {t: np.round(v, 2).tolist() for t, v in self.scores.items()},
+                "scores": {} if lite else {t: np.round(v, 2).tolist() for t, v in self.scores.items()},
                 "playlists": self.playlists(), "liked": [i for i in liked if i in self.idx],
             }
 
@@ -112,12 +121,32 @@ class Library:
         out = []
         for p in self.con.execute("SELECT * FROM playlists ORDER BY created_at"):
             ids = [r[0] for r in self.con.execute("SELECT track_id FROM playlist_tracks WHERE playlist_id=? ORDER BY position", (p["id"],))]
-            out.append({"id": p["id"], "name": p["name"], "kind": p["kind"], "data": json.loads(p["data"] or "null"), "ids": ids})
+            out.append({"id": p["id"], "name": p["name"], "kind": p["kind"], "data": json.loads(p["data"] or "null"), "ids": ids,
+                        "version": p["version"] or 0, "updated": p["updated_at"]})
         return out
 
 
 app = FastAPI(title="Summit")
 lib: Library | None = None
+job = Job(on_done=lambda: lib.reload())
+prefetch = Prefetch()
+
+
+class GzipApi:
+    """Compress JSON (the library is ~1.3 MB, for the phone over cellular); never audio, which is served by Range."""
+
+    def __init__(self, app):
+        from starlette.middleware.gzip import GZipMiddleware
+
+        self.app, self.gzip = app, GZipMiddleware(app, minimum_size=2048)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["path"].startswith("/api/"):
+            return await self.gzip(scope, receive, send)
+        return await self.app(scope, receive, send)
+
+
+app.add_middleware(GzipApi)
 
 
 @app.middleware("http")
@@ -142,8 +171,8 @@ def index():
 
 
 @app.get("/api/library")
-def library():
-    return JSONResponse(lib.payload())
+def library(lite: bool = False):
+    return JSONResponse(lib.payload(lite))
 
 
 @app.get("/audio/{track_id}")
@@ -151,8 +180,36 @@ def audio(track_id: str):
     r = lib.rows.get(track_id)
     if not r:
         raise HTTPException(404)
-    types = {"aiff": "audio/aiff", "aif": "audio/aiff", "m4a": "audio/mp4", "mp3": "audio/mpeg", "wav": "audio/wav", "flac": "audio/flac"}
-    return FileResponse(r["path"], media_type=types.get(r["format"]))  # Starlette FileResponse handles Range
+    return FileResponse(r["path"], media_type=TYPES.get(r["format"]))  # Starlette FileResponse handles Range
+
+
+@app.get("/stream/{track_id}")
+def stream(track_id: str):
+    """Phone audio: lossless files transcoded to AAC once (a couple of seconds the first time), others as they are."""
+    r = lib.rows.get(track_id)
+    if not r:
+        raise HTTPException(404)
+    try:
+        path, media = stream_file(r)
+    except Exception as e:
+        raise HTTPException(500, f"transcode failed: {e}")
+    return FileResponse(path, media_type=media)
+
+
+@app.post("/api/prefetch")
+def prefetch_tracks(ids: list[str] = Body(..., embed=True)):
+    """Transcode these (the next tracks in a queue) in the background."""
+    prefetch.add([lib.rows[i] for i in ids[:20] if i in lib.rows])
+    return {"ok": True}
+
+
+@app.get("/art/{track_id}")
+def art(track_id: str, s: int = 256):
+    r = lib.rows.get(track_id)
+    path = art_file(r, s) if r else None
+    if not path:
+        raise HTTPException(404)
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=604800"})
 
 
 @app.get("/api/search")
@@ -177,6 +234,18 @@ def neighbors(i: int, k: int = 10, space: str = "combined"):
     M = lib.M.get(space, lib.X)
     sims = M @ M[i]
     sims[i] = -2
+    return [int(j) for j in np.argsort(-sims)[:k]]
+
+
+@app.post("/api/suggest")
+def suggest(ids: list[str] = Body(...), k: int = Body(20), space: str = Body("combined")):
+    """Tracks that fit a set (a playlist): nearest to the mean of its tracks, excluding the set itself."""
+    M = lib.M.get(space, lib.X)
+    rows = [lib.idx[i] for i in ids if i in lib.idx]
+    if not rows:
+        return []
+    sims = M @ unit(M[rows].mean(0, keepdims=True))[0]
+    sims[rows] = -2
     return [int(j) for j in np.argsort(-sims)[:k]]
 
 
@@ -237,25 +306,41 @@ def _write_tracks(pid: int, ids: list[str]) -> None:
     lib.con.executemany("INSERT INTO playlist_tracks VALUES (?,?,?)", [(pid, k, i) for k, i in enumerate(ids)])
 
 
+def _playlist(pid: int) -> dict:
+    p = next((p for p in lib.playlists() if p["id"] == pid), None)
+    if not p:
+        raise HTTPException(404, "no such playlist")
+    return p
+
+
 @app.post("/api/playlists")
 def create_playlist(name: str = Body(...), ids: list[str] = Body(...), kind: str = Body("playlist"), data: dict | None = Body(None)):
-    cur = lib.con.execute("INSERT INTO playlists(name, kind, data, created_at, updated_at) VALUES (?,?,?,?,?)",
-                          (name, kind, json.dumps(data), db.now(), db.now()))
-    _write_tracks(cur.lastrowid, ids)
-    lib.con.commit()
-    return {"id": cur.lastrowid}
+    with lib.lock:
+        cur = lib.con.execute("INSERT INTO playlists(name, kind, data, created_at, updated_at, version) VALUES (?,?,?,?,?,1)",
+                              (name, kind, json.dumps(data), db.now(), db.now()))
+        _write_tracks(cur.lastrowid, ids)
+        lib.con.commit()
+    return {"id": cur.lastrowid, "version": 1}
 
 
 @app.put("/api/playlists/{pid}")
-def update_playlist(pid: int, name: str = Body(None), ids: list[str] = Body(None), data: dict | None = Body(None)):
-    if name is not None:
-        lib.con.execute("UPDATE playlists SET name=?, updated_at=? WHERE id=?", (name, db.now(), pid))
-    if data is not None:
-        lib.con.execute("UPDATE playlists SET data=?, updated_at=? WHERE id=?", (json.dumps(data), db.now(), pid))
-    if ids is not None:
-        _write_tracks(pid, ids)
-    lib.con.commit()
-    return {"ok": True}
+def update_playlist(pid: int, name: str = Body(None), ids: list[str] = Body(None), data: dict | None = Body(None),
+                    base: int | None = Body(None)):
+    """base: the version the client edited. If the playlist changed since (another device), nothing is written and the
+    reply is 409 with the current playlist, so the client can re-apply its edit to it."""
+    with lib.lock:
+        cur = _playlist(pid)
+        if base is not None and base != cur["version"]:
+            return JSONResponse({"conflict": True, "playlist": cur}, status_code=409)
+        if name is not None:
+            lib.con.execute("UPDATE playlists SET name=? WHERE id=?", (name, pid))
+        if data is not None:
+            lib.con.execute("UPDATE playlists SET data=? WHERE id=?", (json.dumps(data), pid))
+        if ids is not None:
+            _write_tracks(pid, ids)
+        lib.con.execute("UPDATE playlists SET updated_at=?, version=COALESCE(version, 0) + 1 WHERE id=?", (db.now(), pid))
+        lib.con.commit()
+        return _playlist(pid)
 
 
 @app.delete("/api/playlists/{pid}")
@@ -269,6 +354,29 @@ def delete_playlist(pid: int):
 @app.post("/api/export")
 def export():
     return export_all(lib.con)
+
+
+@app.get("/api/pending")
+def library_pending():
+    """Library files not on the map yet (see scan.pending), and the state of any update run."""
+    return {**({} if job.running else pending(lib.con)), "job": job.state()}
+
+
+@app.get("/api/update")
+def update_state():
+    return job.state()
+
+
+@app.post("/api/update")
+def update_start():
+    job.start()
+    return job.state()
+
+
+@app.delete("/api/update")
+def update_stop():
+    job.stop()
+    return job.state()
 
 
 app.mount("/web", StaticFiles(directory=WEB), name="web")

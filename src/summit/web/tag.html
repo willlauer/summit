@@ -4,8 +4,8 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Summit Tag</title>
 <link rel="stylesheet" href="/web/shared.css">
-<script src="/web/vendor/plotly.min.js"></script>
 <script src="/web/map.js"></script>
+<script type="module" src="/web/galaxy.js"></script>
 <style>
   /* layout only: components come from shared.css */
   body { display: grid; grid-template-columns: var(--side-w, 250px) 3px minmax(0, 1fr); }
@@ -35,6 +35,7 @@
       <button class="primary" data-act="confirmtop" data-i18n="confirmTop">Confirm top suggestion</button>
       <select id="addtag"></select>
       <button data-act="save" data-i18n="savePlaylist">Save as playlist</button>
+      <button data-act="addpl" data-i18n="addToPl">＋ Add to playlist</button>
     </span>
   </div>
   <div class="tablewrap"><table>
@@ -103,33 +104,43 @@ function clearScope() { st.scope = null; st.scopeKind = 'all'; S.focus(map, null
 
 S.ready.then(() => {
   if (H.color === 'cluster') H.setColor('tagged');
-  S.plot(map, { space: H.space, colorMode: H.color }).then(() => {
-    map.on('plotly_hover', e => { const p = e.points.find(p => p.curveNumber === 0); if (p && e.event && e.event.altKey) H.player.audition(p.pointIndex); });
-    map.on('plotly_click', e => {
-      const p = e.points.find(p => p.curveNumber === 0); if (!p) return;
-      H.player.play(p.pointIndex, { queue: visible(), label: scopeLabel() });
-      const tr = document.querySelector(`tr[data-i="${p.pointIndex}"]`); if (tr) tr.scrollIntoView({ block: 'center' });
-    });
+  const onTap = i => {
+    if (i == null) return;
+    H.player.play(i, { queue: visible(), label: scopeLabel() });
+    const tr = document.querySelector(`tr[data-i="${i}"]`); if (tr) tr.scrollIntoView({ block: 'center' });
+  };
+  S.plot(map, { space: H.space, colorMode: H.color, onTap }).then(() => {
     S.ctrlLasso(map, (idxs, add) => {
+      H.navPush();
       st.scope = add && st.scope && st.scopeKind === 'lasso' ? [...new Set([...st.scope, ...idxs])] : idxs;
       st.scopeKind = 'lasso'; S.focus(map, st.scope); st.checked.clear(); renderTable();
-    }, clearScope);
-    const resize = () => Plotly.Plots.resize(map);
-    S.splitter(document.getElementById('splitSide'), { target: document.getElementById('side'), cssVar: '--side-w', min: 190, max: 520, key: 'summit.tag.side', onResize: resize });
-    S.splitter(document.getElementById('splitMap'), { target: map, cssVar: '--map-h', axis: 'y', min: 150, max: window.innerHeight - 200, key: 'summit.tag.map', onResize: resize });
+    }, () => { if (st.scope) { H.navPush(); clearScope(); } });
+    S.splitter(document.getElementById('splitSide'), { target: document.getElementById('side'), cssVar: '--side-w', min: 190, max: 520, key: 'summit.tag.side' });
+    S.splitter(document.getElementById('splitMap'), { target: map, cssVar: '--map-h', axis: 'y', min: 150, max: window.innerHeight - 200, key: 'summit.tag.map' });
+    H.registerView('tag', {
+      save: () => ({ scope: st.scope, scopeKind: st.scopeKind, scopeName: st.scopeName, tag: st.tag, untagged: st.untagged }),
+      load(v) {
+        if (v.tag !== st.tag) H.setColor(v.tag ? 'tag:' + v.tag : 'tagged');
+        Object.assign(st, v); st.checked.clear();
+        document.getElementById('untagged').checked = st.untagged;
+        S.focus(map, st.scope); refresh();
+      },
+    });
   });
   refresh();
 });
 
 document.getElementById('side').onclick = e => {
-  const pl = e.target.closest('[data-pl]');
-  if (pl) { const p = S.data.playlists.find(p => p.id === +pl.dataset.pl); st.scope = p.ids.map(id => S.data.byId[id]).filter(x => x != null); st.scopeKind = 'playlist'; st.scopeName = p.name; S.focus(map, st.scope); st.checked.clear(); renderTable(); return; }
-  const r = e.target.closest('.tagrow[data-tag]'); if (!r) return;
+  const pl = e.target.closest('[data-pl]'), r = e.target.closest('.tagrow[data-tag]');
+  if (pl || r) H.navPush();
+  if (pl) { const p = S.data.playlists.find(p => p.id === +pl.dataset.pl); st.scope = H.playlistTracks(p); st.scopeKind = 'playlist'; st.scopeName = p.name; S.focus(map, st.scope); st.checked.clear(); renderTable(); return; }
+  if (!r) return;
   st.tag = st.tag === r.dataset.tag ? null : r.dataset.tag;
   H.setColor(st.tag ? 'tag:' + st.tag : 'tagged');
   st.checked.clear(); refresh();
 };
 const rows = document.getElementById('rows');
+rows.addEventListener('dblclick', e => { const tr = e.target.closest('tr[data-i]'); if (tr && !e.target.closest('button, input')) H.dblGoTo(e, +tr.dataset.i); });
 rows.addEventListener('mouseover', e => { const tr = e.target.closest('tr'); if (tr) S.highlight(map, [+tr.dataset.i], H.space); });
 rows.addEventListener('click', async e => {
   const c = e.target.closest('[data-chk]'); if (c) { const j = +c.dataset.chk; c.checked ? st.checked.add(j) : st.checked.delete(j); renderTable(); return; }
@@ -142,6 +153,7 @@ document.getElementById('chkall').onchange = e => { st.checked = new Set(e.targe
 document.getElementById('untagged').onchange = e => { st.untagged = e.target.checked; renderTable(); };
 document.getElementById('bulk').addEventListener('click', async e => {
   const a = e.target.closest('[data-act]'); if (!a) return;
+  if (a.dataset.act === 'addpl') { H.playlistMenu(a, [...st.checked]); return; }  // keeps the ticks: the menu may be dismissed
   try {
     if (a.dataset.act === 'confirmtop') {
       const by = {};  // group by tag so each tag is one request

@@ -109,6 +109,7 @@ def analyze(limit: int | None = None, sample: bool = False, workers: int = 5, lo
     con = db.connect()
     rows = con.execute(
         "SELECT id, path FROM tracks WHERE missing=0 AND duration <= ? AND id NOT IN (SELECT track_id FROM vectors WHERE kind='clap') "
+        "AND id NOT IN (SELECT track_id FROM failures) "
         + ("ORDER BY random()" if sample else "ORDER BY path"), (MAX_DURATION,)
     ).fetchall()
     todo = [(r["id"], r["path"]) for r in rows][: limit or None]
@@ -157,6 +158,7 @@ def analyze(limit: int | None = None, sample: bool = False, workers: int = 5, lo
             if "error" in r:
                 failed += 1
                 log(f"  ! {r['id']}: {r['error']}")
+                con.execute("INSERT OR REPLACE INTO failures VALUES (?,?,?)", (r["id"], r["error"], db.now()))
                 continue
             batch.append(r)
             if len(batch) >= 8:

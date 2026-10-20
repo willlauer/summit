@@ -40,9 +40,14 @@ def read_tags(path: Path) -> dict | None:
     return out
 
 
+def files(root: Path = LIBRARY) -> list[Path]:
+    return sorted(p for p in root.rglob("*") if p.suffix.lower() in AUDIO_EXTS and not p.name.startswith("."))
+
+
 def scan(root: Path = LIBRARY, log=print) -> dict:
     con = db.connect()
     known = {r["path"]: dict(r) for r in con.execute("SELECT * FROM tracks")}
+    skipped = {r[0]: (r[1], r[2]) for r in con.execute("SELECT path, size, mtime FROM skipped")}
     by_hash = {r["hash"]: r for r in known.values() if r["hash"]}
     seen, stats = set(), {"new": 0, "updated": 0, "moved": 0, "skipped": 0, "missing": 0, "removed": 0}
     # Files outside MIN_DURATION..MAX_DURATION aren't tracks (samples, DJ mixes): drop any we already know.
@@ -51,15 +56,18 @@ def scan(root: Path = LIBRARY, log=print) -> dict:
         db.purge(con, long)
         stats["removed"] = len(long)
         known = {p: r for p, r in known.items() if r["id"] not in set(long)}
-    files = sorted(p for p in root.rglob("*") if p.suffix.lower() in AUDIO_EXTS and not p.name.startswith("."))
-    for n, p in enumerate(files, 1):
+    found = files(root)
+    for n, p in enumerate(found, 1):
         path, st = str(p), p.stat()
         seen.add(path)
         row = known.get(path)
         if row and row["size"] == st.st_size and row["mtime"] == st.st_mtime and not row["missing"]:
             continue
+        if not row and skipped.get(path) == (st.st_size, st.st_mtime):
+            continue
         tags = read_tags(p)
         if not tags or not MIN_DURATION <= tags["duration"] <= MAX_DURATION:
+            con.execute("INSERT OR REPLACE INTO skipped VALUES (?,?,?)", (path, st.st_size, st.st_mtime))
             stats["skipped"] += 1
             continue
         h = content_hash(p, st.st_size)
@@ -73,6 +81,7 @@ def scan(root: Path = LIBRARY, log=print) -> dict:
             row, stats["moved"] = moved, stats["moved"] + 1
         if row:
             con.execute(f"UPDATE tracks SET {', '.join(k + '=?' for k in meta)}, missing=0 WHERE id=?", (*meta.values(), row["id"]))
+            con.execute("DELETE FROM failures WHERE track_id=?", (row["id"],))  # the file changed: worth another try
             stats["updated"] += 0 if moved else 1
         else:
             con.execute(
@@ -82,12 +91,38 @@ def scan(root: Path = LIBRARY, log=print) -> dict:
             stats["new"] += 1
         if n % 500 == 0:
             con.commit()
-            log(f"  scanned {n}/{len(files)}")
+            log(f"  scanned {n}/{len(found)}")
     for path, row in known.items():
         if path not in seen and not row["missing"] and not Path(path).exists():
             con.execute("UPDATE tracks SET missing=1 WHERE id=?", (row["id"],))
             stats["missing"] += 1
+    con.executemany("DELETE FROM skipped WHERE path=?", [(p,) for p in skipped if p not in seen])
     con.commit()
     total = con.execute("SELECT COUNT(*) FROM tracks WHERE missing=0").fetchone()[0]
     log(f"scan: {stats} -> {total} tracks")
     return stats
+
+
+def counts(con) -> dict:
+    """unanalyzed: scanned, no embeddings yet · unplaced: analyzed but not on the map yet (needs a layout) ·
+    failed: couldn't be decoded."""
+    analyzed = "SELECT track_id FROM vectors WHERE kind='clap'"
+    q = lambda sql: con.execute(f"SELECT COUNT(*) FROM tracks WHERE missing=0 AND duration <= ? AND {sql}", (MAX_DURATION,)).fetchone()[0]
+    return {
+        "unanalyzed": q(f"id NOT IN ({analyzed}) AND id NOT IN (SELECT track_id FROM failures)"),
+        "unplaced": q(f"id IN ({analyzed}) AND id NOT IN (SELECT track_id FROM layouts)"),
+        "failed": q("id IN (SELECT track_id FROM failures)"),
+    }
+
+
+def pending(con, root: Path = LIBRARY) -> dict:
+    """What `summit update` has left to do, plus `new`: files scan hasn't seen yet (or that changed since).
+    Walks the library but reads no tags, so it is cheap enough to ask often."""
+    sig = lambda rows: {r[0]: (r[1], r[2]) for r in rows}
+    known = sig(con.execute("SELECT path, size, mtime FROM tracks WHERE missing=0"))
+    skipped = sig(con.execute("SELECT path, size, mtime FROM skipped"))
+    new = 0
+    for p in files(root):
+        st = p.stat()
+        new += known.get(str(p)) != (st.st_size, st.st_mtime) and skipped.get(str(p)) != (st.st_size, st.st_mtime)
+    return {"new": new, **counts(con)}

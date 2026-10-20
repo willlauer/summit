@@ -18,6 +18,16 @@
   .boot { position: absolute; inset: 0; display: grid; place-items: center; color: var(--cyan); letter-spacing: .3em; text-transform: uppercase; }
   .boot::after { content: "▌"; color: var(--yellow); animation: blink 1s steps(1) infinite; }
   .help.hint { position: absolute; left: 18px; top: 100%; margin-top: 6px; padding: 5px 10px; background: rgba(5, 4, 10, .9); border: 1px solid var(--line); z-index: 20; }
+  .navbtns { display: flex; gap: 2px; }
+  .navbtns button { padding: 4px 9px; font-size: 14px; line-height: 1; }
+  #libBtn { white-space: nowrap; }
+  #libBtn.todo { color: var(--yellow); border-color: rgba(252, 238, 10, .5); }
+  #libBtn.busy::before { content: "◌ "; display: inline-block; animation: blink 1s steps(1) infinite; }
+  #libPanel { width: 340px; padding: 12px 14px; }
+  #libPanel .count { display: flex; justify-content: space-between; padding: 3px 0; }
+  #libPanel .count b { color: var(--yellow); font-weight: 400; }
+  #libPanel .count.zero b { color: var(--muted); }
+  #libPanel .log { margin-top: 8px; max-height: 120px; overflow: auto; font-size: 11px; color: var(--muted); white-space: pre-wrap; word-break: break-all; }
 </style>
 </head>
 <body>
@@ -26,12 +36,15 @@
     <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 3 2 21h20L12 3zm0 5.2 3.2 5.6-1.7 1.4-1.5-2-2.6 3.4L7.9 15 12 8.2z"/></svg>
     <span>Summit</span>
   </div>
-  <div class="tabs" id="modes"><button data-v="map" class="on" data-i18n="mode.map">Map</button><button data-v="tag" data-i18n="mode.tag">Tag</button><button data-v="flow" data-i18n="mode.flow">Flow</button></div>
+  <div class="navbtns"><button id="back" class="ghost" data-i18n-title="backTip" disabled>‹</button><button id="fwd" class="ghost" data-i18n-title="fwdTip" disabled>›</button></div>
+  <div class="tabs" id="modes"><button data-v="map" class="on" data-i18n="mode.map">Map</button><button data-v="tag" data-i18n="mode.tag">Tag</button><button data-v="flow" data-i18n="mode.flow">Flow</button><button data-v="tree" data-i18n="mode.tree">Tree</button></div>
   <div class="seg" id="space"></div>
+  <button id="v3d" class="small" data-i18n-title="v3dTip">3D</button>
   <label class="ctl"><span data-i18n="color">Color</span> <select id="color"></select></label>
   <span class="ctl"><span data-i18n="labels">Labels</span>
     <span class="seg" id="labelsTog"><button data-v="fam" data-i18n="genres">Genres</button><button data-v="sub" data-i18n="subgenres">Subgenres</button></span></span>
   <div class="search"><input id="q" data-i18n-ph="searchPh" placeholder="Search a vibe or a name" autocomplete="off" spellcheck="false"></div>
+  <button id="libBtn" class="small ghost" hidden></button>
   <div class="seg" id="lang"><button data-v="en">EN</button><button data-v="ja">日本語</button></div>
   <span class="help hint small" data-i18n-html="shellHelp"></span>
 </header>
@@ -40,12 +53,14 @@
 
 <script>
 const H = window.Summit, frames = document.getElementById('frames');
-const PAGES = { map: '/web/map.html', tag: '/web/tag.html', flow: '/web/flow.html' };
+const PAGES = { map: '/web/map.html', tag: '/web/tag.html', flow: '/web/flow.html', tree: '/web/tree.html' };
 const loaded = {};
 H.applyLang(document);
 
+// Navigation (tab clicks, Back / Forward, go-to) goes through here; the last mode is remembered for next launch.
 function setMode(m) {
   H.mode = m;
+  try { localStorage.setItem('summit.mode', m); } catch (e) {}
   document.querySelectorAll('#modes button').forEach(b => b.classList.toggle('on', b.dataset.v === m));
   if (!loaded[m]) {
     const f = document.createElement('iframe');
@@ -56,6 +71,7 @@ function setMode(m) {
   Object.entries(loaded).forEach(([k, f]) => f.classList.toggle('on', k === m));
   H.emit('mode', m);
 }
+H.setMode = setMode;
 
 function colorMenu() {
   const d = H.data, sel = document.getElementById('color'), cats = {};
@@ -79,15 +95,22 @@ H.ready.then(d => {
   H.applyHelp(document);
   let m = 'map'; try { m = localStorage.getItem('summit.mode') || 'map'; } catch (e) {}
   setMode(PAGES[m] ? m : 'map');
+  checkLibrary();
 });
 syncToggles();
 
-document.getElementById('modes').onclick = e => { const b = e.target.closest('button'); if (b) { setMode(b.dataset.v); try { localStorage.setItem('summit.mode', b.dataset.v); } catch (e) {} } };
+document.getElementById('modes').onclick = e => { const b = e.target.closest('button'); if (b && b.dataset.v !== H.mode) { H.navPush(); setMode(b.dataset.v); } };
+document.getElementById('back').onclick = () => H.back();
+document.getElementById('fwd').onclick = () => H.forward();
+H.on('nav', () => { document.getElementById('back').disabled = !H.canBack(); document.getElementById('fwd').disabled = !H.canForward(); });
 document.getElementById('space').onclick = e => {
   const b = e.target.closest('button'); if (!b || b.disabled) return;
   document.querySelectorAll('#space button').forEach(x => x.classList.toggle('on', x === b));
   H.setSpace(b.dataset.v);
 };
+const v3d = document.getElementById('v3d');
+v3d.classList.toggle('primary', !!H.view3d);
+v3d.onclick = () => { H.set3D(!H.view3d); v3d.classList.toggle('primary', H.view3d); };
 document.getElementById('color').onchange = e => H.setColor(e.target.value);
 H.on('color', m => { document.getElementById('color').value = m; });  // modes can change it too
 document.getElementById('labelsTog').onclick = e => {
@@ -98,12 +121,89 @@ document.getElementById('lang').onclick = e => {
   const b = e.target.closest('button'); if (!b || b.dataset.v === H.lang) return;
   H.setLang(b.dataset.v); syncToggles();
   if (H.data) { colorMenu(); H.renderPlayer(); }
+  if (lib.job) renderLib();
 };
 const q = document.getElementById('q');
 q.addEventListener('keydown', e => {
-  if (e.key === 'Enter') H.search(q.value).catch(err => H.toast(err.message));
-  if (e.key === 'Escape') { q.value = ''; H.search(''); q.blur(); }
+  if (e.key === 'Enter') { H.navPush(); H.search(q.value).catch(err => H.toast(err.message)); }
+  if (e.key === 'Escape') { if (q.value) H.navPush(); q.value = ''; H.search(''); q.blur(); }
 });
+H.on('query', v => { q.value = v; });  // Back / Forward restore the search text with the view
+
+// ---- library: tracks on disk that aren't on the map yet, and the update run that adds them ----
+const lib = { counts: null, job: null, poll: 0 }, libBtn = document.getElementById('libBtn');
+const todo = () => (lib.counts ? lib.counts.new + lib.counts.unanalyzed + lib.counts.unplaced : 0);
+async function checkLibrary() {
+  try { const r = await H.pending(); lib.job = r.job; if (!r.job.running) lib.counts = r; } catch (e) { return; }
+  renderLib();
+  if (lib.job.running) pollJob();
+}
+function pollJob() {
+  clearTimeout(lib.poll);
+  lib.poll = setTimeout(async () => {
+    const was = lib.job;
+    try { lib.job = await H.update.state(); } catch (e) { pollJob(); return; }
+    if (lib.job.running) { renderLib(); pollJob(); return; }
+    if (was.running) await checkLibrary();  // finished: recount
+  }, 1500);
+}
+function libLabel() {
+  const j = lib.job;
+  if (j && j.running) return H.t('upd.' + j.stage) + (j.progress ? ` ${j.progress[0]}/${j.progress[1]}` : '');
+  if (j && j.code === 0) return H.t('libUpdated');
+  if (!todo()) return H.t('libOk');
+  return lib.counts.unanalyzed + lib.counts.unplaced ? H.t('libTodo', { n: todo() }) : H.t('libNewFiles', { n: todo() });  // unscanned files may not be tracks
+}
+function renderLib() {
+  const j = lib.job || {};
+  libBtn.hidden = false;
+  libBtn.textContent = libLabel();
+  libBtn.classList.toggle('busy', !!j.running);
+  libBtn.classList.toggle('todo', !!j.running || todo() > 0 || j.code === 0);
+  const panel = document.getElementById('libPanel');
+  if (panel) panel.innerHTML = libPanelHTML();
+}
+function libPanelHTML() {
+  const j = lib.job || {}, c = lib.counts || { new: 0, unanalyzed: 0, unplaced: 0, failed: 0 };
+  const row = (k, n) => `<div class="count${n ? '' : ' zero'}"><span>${H.t(k)}</span><b>${n.toLocaleString()}</b></div>`;
+  let h = `<div class="mhead">${H.t('library')}</div>`;
+  if (j.running) {
+    const pct = j.progress && j.progress[1] ? (j.progress[0] / j.progress[1]) * 100 : 0;
+    h += `<div class="kicker">${H.esc(libLabel())}</div><div class="meter"><div class="track"><b style="width:${pct}%"></b></div></div>
+      <div class="actions"><button class="danger" data-lib="stop">${H.t('stop')}</button></div><p class="hint">${H.t('updStopHint')}</p>`;
+  } else {
+    h += row('libNew', c.new) + row('libUnanalyzed', c.unanalyzed) + row('libUnplaced', c.unplaced) + (c.failed ? row('libFailed', c.failed) : '');
+    if (j.code === 0) h += `<p class="hint">${H.t('updDone')}</p><div class="actions"><button class="primary" data-lib="reload">${H.t('reload')}</button></div>`;
+    else if (j.code != null && !j.stopped) h += `<p class="hint" style="color:var(--magenta)">${H.t('updFailed')}</p>`;
+    else if (j.stopped) h += `<p class="hint">${H.t('updStopped')}</p>`;
+    h += `<div class="actions"><button class="${j.code === 0 ? '' : 'primary'}" data-lib="start" ${todo() ? '' : 'disabled'}>${H.t('updStart', { n: todo() })}</button>
+      <button class="ghost" data-lib="recheck">${H.t('recheck')}</button></div><p class="hint">${H.t('updHint')}</p>`;
+  }
+  if (j.log && j.log.length && (j.running || (j.code && !j.stopped))) h += `<div class="log">${H.esc(j.log.join('\n'))}</div>`;
+  return h;
+}
+libBtn.onclick = () => {
+  const old = document.getElementById('libPanel');
+  if (old) { old.close(); return; }
+  const m = document.createElement('div');
+  m.id = 'libPanel'; m.className = 'menu'; m.innerHTML = libPanelHTML();
+  document.body.appendChild(m);
+  const r = libBtn.getBoundingClientRect();
+  m.style.left = Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8)) + 'px'; m.style.top = r.bottom + 6 + 'px';
+  const outside = e => { if (!m.contains(e.target) && !libBtn.contains(e.target)) m.close(); };
+  const elsewhere = d => { if (d !== document) m.close(); };  // a click inside a mode frame
+  m.close = () => { m.remove(); document.removeEventListener('mousedown', outside, true); H.off('mousedown', elsewhere); };
+  document.addEventListener('mousedown', outside, true); H.on('mousedown', elsewhere);
+  m.onclick = async e => {
+    const b = e.target.closest('[data-lib]'); if (!b) return;
+    try {
+      if (b.dataset.lib === 'start') { lib.job = await H.update.start(); renderLib(); pollJob(); }
+      if (b.dataset.lib === 'stop') { lib.job = await H.update.stop(); renderLib(); }
+      if (b.dataset.lib === 'recheck') { b.disabled = true; await checkLibrary(); }
+      if (b.dataset.lib === 'reload') location.reload();
+    } catch (err) { H.toast(err.message); }
+  };
+};
 </script>
 </body>
 </html>

@@ -15,7 +15,8 @@ uv run summit status
 After adding music: `scan`, `analyze`, `layout`, then reopen the app. Files shorter than 60 s or longer than 12 min
 (samples, DJ mixes, recordings) are ignored; `scan` removes any that were indexed before.
 
-**Modes:** Map (explore, playlists, cluster names) · Tag (bulk tagging) · Flow (route a set through the map).
+**Modes:** Map (explore, playlists, cluster names; 3D toggle) · Tag (bulk tagging) · Flow (route a set through the map) ·
+Tree (grow a playlist by following "sounds like").
 
 **Organisation:** each map has *families* (where the embedding has real density gaps) split into *sub-clusters*
 only where a family has stable internal structure — no fixed counts. Names come from the most distinctive Discogs
@@ -31,6 +32,13 @@ retrains as a classifier on your picks. "Teach a vibe" turns a selection into a 
 
 **rekordbox:** Preferences → Advanced → rekordbox xml → Imported Library = `data/exports/summit.xml`; playlists appear
 under "rekordbox xml" in the tree (folder `summit/`). Summit never touches rekordbox's own database.
+
+**Phone (Android, `android/`):** the same library, map (OpenGL, 2D/3D), search, playlists and player, over the API.
+Run the server in the background with `uv run summit service install` (the desktop window then attaches to it), share
+it on your tailnet with `tailscale serve --bg 8766`, and enter the `https://<mac>.<tailnet>.ts.net` address under
+Library → ⚙ in the app. Lossless tracks are transcoded to AAC on first play (`summit transcode` does them all up
+front). Build and install with `cd android && ./gradlew installDebug` (Android Studio's JDK and SDK; phone on USB).
+Icons for both apps come from `scripts/make_icon.py`; `summit bundle` builds `~/Applications/Summit.app`.
 
 Data lives in `data/` (gitignored); models in `models/` (EffNet ONNX downloads automatically; CLAP via Hugging Face cache).
 `mockups/` holds the throwaway UI mockups from the design phase.

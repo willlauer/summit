@@ -4,22 +4,27 @@
   // Colour roles (DESIGN.md). Data palette is for cluster data only.
   const PALETTE = ['#00f0ff', '#ff2a6d', '#05ffa1', '#b026ff', '#ff9a3d', '#5aa9ff', '#fcee0a', '#f45bff',
                    '#3dffc5', '#ff5c5c', '#a8ff3d', '#ffb3d9', '#7d7dff', '#e2b45a', '#40c4aa', '#c9a6ff'];
-  const UI = { focus: '#ffffff', selected: '#fcee0a', confirmed: '#05ffa1', suggested: '#6f8ba3', untagged: '#2a3a4a', danger: '#ff2a6d' };
+  const UI = { focus: '#ffffff', selected: '#ffd84d', confirmed: '#3dffb0', suggested: '#8b8fa4', untagged: '#2a3344', danger: '#ff4d8d' };
 
   const H = {
     PALETTE, UI, data: null, space: 'combined', color: 'cluster', results: null, help: false, mode: 'map',
     listeners: {},
     on(ev, fn) { (this.listeners[ev] = this.listeners[ev] || []).push(fn); },
+    off(ev, fn) { this.listeners[ev] = (this.listeners[ev] || []).filter(f => f !== fn); },
     emit(ev, ...a) { (this.listeners[ev] || []).forEach(fn => { try { fn(...a); } catch (e) { /* listener from a reloaded frame */ } }); },
   };
   try { H.space = localStorage.getItem('summit.space') || 'combined'; H.help = !!localStorage.getItem('summit.help'); } catch (e) {}
   // Map labels: genres (families) and subgenres (sub-clusters) toggle independently. Both on = follow zoom.
   H.labelShow = { fam: true, sub: true };
   try { Object.assign(H.labelShow, JSON.parse(localStorage.getItem('summit.labels') || '{}')); } catch (e) {}
+  // Map in 3D (the galaxy view): every map except Flow's follows it.
+  try { H.view3d = localStorage.getItem('summit.3d') === '1'; } catch (e) {}
+  H.set3D = on => { H.view3d = on; try { localStorage.setItem('summit.3d', on ? '1' : ''); } catch (e) {} H.emit('3d', on); };
   H.setLabels = show => { H.labelShow = show; try { localStorage.setItem('summit.labels', JSON.stringify(show)); } catch (e) {} H.emit('labels', show); };
 
   const api = async (path, method = 'GET', body) => {
     const r = await fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+    if (r.status === 409) { const e = new Error('conflict'); e.conflict = await r.json(); throw e; }
     if (!r.ok) throw new Error(`${method} ${path}: ${r.status}`);
     return r.json();
   };
@@ -71,6 +76,7 @@
   let searchSeq = 0;
   H.search = async q => {
     const seq = ++searchSeq;
+    H.query = q.trim();
     if (!q.trim()) { H.results = null; H.emit('search', null, ''); return null; }
     const res = await api(`/api/search?q=${encodeURIComponent(q)}&n=60`);
     if (seq !== searchSeq) return null;
@@ -118,7 +124,7 @@
   };
   H.createPlaylist = async (name, idxs, kind = 'playlist', data = null) => {
     const ids = idxs.map(i => H.data.tracks[i].id), res = await api('/api/playlists', 'POST', { name, ids, kind, data });
-    H.data.playlists.push({ id: res.id, name, kind, data, ids });
+    H.data.playlists.push({ id: res.id, name, kind, data, ids, version: res.version });
     H.emit('playlists');
     return res;
   };
@@ -127,6 +133,130 @@
     H.data.playlists = H.data.playlists.filter(p => p.id !== id);
     H.emit('playlists');
   };
+  // Track ids, not indexes: a playlist can hold tracks that aren't on the map right now, and those must survive edits.
+  // Every write names the version it was based on. If the phone changed the playlist meanwhile, the server refuses
+  // (409) and sends the current one: edits (add / remove) are re-applied to it; a whole new order is dropped instead.
+  const adopt = p => { const i = H.data.playlists.findIndex(x => x.id === p.id); if (i >= 0) H.data.playlists[i] = p; else H.data.playlists.push(p); };
+  async function put(pid, body, edit) {
+    const p = H.data.playlists.find(p => p.id === pid);
+    try { adopt(await api(`/api/playlists/${pid}`, 'PUT', { ...body, base: p.version })); }
+    catch (e) {
+      if (!e.conflict) throw e;
+      adopt(e.conflict.playlist);
+      if (edit) adopt(await api(`/api/playlists/${pid}`, 'PUT', { ids: edit(e.conflict.playlist.ids), base: e.conflict.playlist.version }));
+      else H.toast(H.t('plChangedElsewhere'));
+    }
+    H.emit('playlists');
+  }
+  H.setPlaylistIds = (pid, ids) => put(pid, { ids });
+  H.editPlaylist = (pid, edit) => put(pid, { ids: edit(H.data.playlists.find(p => p.id === pid).ids) }, edit);
+  H.renamePlaylist = (pid, name) => put(pid, { name });
+  H.addToPlaylist = async (pid, idxs) => {
+    const p = H.data.playlists.find(p => p.id === pid), have = new Set(p.ids);
+    const add = [...new Set(idxs.map(i => H.data.tracks[i].id))].filter(id => !have.has(id));
+    if (add.length) await H.editPlaylist(pid, ids => [...ids, ...add.filter(id => !ids.includes(id))]);
+    return add.length;
+  };
+  H.removeFromPlaylist = (pid, id) => H.editPlaylist(pid, ids => ids.filter(x => x !== id));
+  // Pick up edits made on the phone when the window comes back into view.
+  async function syncPlaylists() {
+    if (!H.data || document.hidden) return;
+    try {
+      const fresh = await api('/api/playlists'), sig = ps => ps.map(p => `${p.id}:${p.version}`).join();
+      if (sig(fresh) !== sig(H.data.playlists)) { H.data.playlists = fresh; H.emit('playlists'); }
+    } catch (e) {}
+  }
+  document.addEventListener('visibilitychange', syncPlaylists);
+  window.addEventListener('focus', syncPlaylists);
+  setInterval(syncPlaylists, 20000);
+  H.playlistTracks = p => p.ids.map(id => H.data.byId[id]).filter(i => i != null);
+  // "Add to playlist" menu, drawn in whichever document the button lives in (the host or a mode frame).
+  // Flows are playlists too, but their tracks come from the route, so they aren't offered here.
+  H.playlistMenu = (anchor, idxs) => {
+    const doc = anchor.ownerDocument, old = doc.getElementById('plmenu');
+    if (old) { old.close(); if (old.anchor === anchor) return; }
+    if (!idxs.length) return;
+    const ids = idxs.map(i => H.data.tracks[i].id), pls = H.data.playlists.filter(p => p.kind === 'playlist');
+    const m = doc.createElement('div');
+    m.id = 'plmenu'; m.className = 'menu'; m.anchor = anchor;
+    m.innerHTML = `<div class="mhead">${H.t('addToN', { n: idxs.length })}</div>` + pls.map(p => {
+      const has = ids.every(id => p.ids.includes(id));
+      return `<button data-pl="${p.id}" class="${has ? 'has' : ''}"><span class="grow">${has ? '✓ ' : ''}${H.esc(p.name)}</span><span class="muted small">${p.ids.length}</span></button>`;
+    }).join('') + `<button data-pl="new" class="new">${H.t('newPlaylistDots')}</button>`;
+    doc.body.appendChild(m);
+    const r = anchor.getBoundingClientRect(), w = doc.defaultView;
+    m.style.left = Math.max(8, Math.min(r.left, w.innerWidth - m.offsetWidth - 8)) + 'px';
+    m.style.top = (r.bottom + 6 + m.offsetHeight < w.innerHeight ? r.bottom + 6 : Math.max(8, r.top - 6 - m.offsetHeight)) + 'px';
+    const outside = e => { if (!m.contains(e.target) && !anchor.contains(e.target)) m.close(); };
+    const esc = e => { if (e.key === 'Escape') { e.stopPropagation(); m.close(); } };
+    const elsewhere = d => { if (d !== doc) m.close(); };  // a click in another frame never reaches this document
+    m.close = () => { m.remove(); doc.removeEventListener('mousedown', outside, true); doc.removeEventListener('keydown', esc, true); H.off('mousedown', elsewhere); };
+    doc.addEventListener('mousedown', outside, true); doc.addEventListener('keydown', esc, true); H.on('mousedown', elsewhere);
+    m.onclick = async e => {
+      const b = e.target.closest('[data-pl]'); if (!b) return;
+      m.close();
+      try {
+        if (b.dataset.pl === 'new') {
+          const n = w.prompt(H.t('playlistName'), H.t('newPlaylist'));
+          if (n) { await H.createPlaylist(n, idxs); H.toast(H.t('saved', { x: n })); }
+          return;
+        }
+        const p = pls.find(p => p.id === +b.dataset.pl), k = await H.addToPlaylist(p.id, idxs);
+        H.toast(k ? H.t('addedTo', { n: k, x: p.name }) : H.t('alreadyIn', { x: p.name }));
+      } catch (err) { H.toast(err.message); }
+    };
+  };
+
+  // ---- library updates: files not on the map yet, and the `summit update` run that adds them ----
+  H.pending = () => api('/api/pending');
+  H.update = { state: () => api('/api/update'), start: () => api('/api/update', 'POST'), stop: () => api('/api/update', 'DELETE') };
+
+  // ---- navigation: Back / Forward across modes and what each mode is showing (open track, selection, zoom) ----
+  // Mode pages register a view {save, load} once ready; anything that changes what you're looking at calls
+  // H.navPush() first, so Back returns to the state before it.
+  const views = {}, viewWaits = {}, nav = { back: [], fwd: [], busy: false };
+  H.registerView = (mode, v) => { views[mode] = v; (viewWaits[mode] || []).forEach(r => r(v)); delete viewWaits[mode]; };
+  const viewOf = mode => (views[mode] ? Promise.resolve(views[mode]) : new Promise(r => (viewWaits[mode] = viewWaits[mode] || []).push(r)));
+  const here = () => ({ mode: H.mode, q: H.query || '', state: views[H.mode] ? views[H.mode].save() : null });
+  H.navPush = () => {
+    if (nav.busy || !H.data) return;
+    const loc = here(), top = nav.back[nav.back.length - 1];
+    if (!top || JSON.stringify(top) !== JSON.stringify(loc)) { nav.back.push(loc); if (nav.back.length > 100) nav.back.shift(); }
+    nav.fwd = [];
+    H.emit('nav');
+  };
+  async function travel(from, to) {
+    if (!from.length || nav.busy) return;
+    const loc = from.pop();
+    to.push(here());
+    nav.busy = true;
+    try {
+      H.setMode(loc.mode);
+      H.query = loc.q; H.emit('query', loc.q);
+      const v = await viewOf(loc.mode);
+      if (loc.state) await v.load(loc.state);
+    } finally { nav.busy = false; H.emit('nav'); }
+  }
+  H.back = () => travel(nav.back, nav.fwd);
+  H.forward = () => travel(nav.fwd, nav.back);
+  H.canBack = () => nav.back.length > 0;
+  H.canForward = () => nav.fwd.length > 0;
+  // Go to a track: switch to the map, centre on it and open it. Back returns to wherever you were.
+  H.goTo = async i => {
+    if (i == null) return;
+    H.navPush();
+    nav.busy = true;
+    try { H.setMode('map'); await (await viewOf('map')).show(i); } finally { nav.busy = false; H.emit('nav'); }
+  };
+  // Explore similar: start a tree in Tree mode from this track.
+  H.explore = async i => {
+    if (i == null) return;
+    H.navPush();
+    nav.busy = true;
+    try { H.setMode('tree'); await (await viewOf('tree')).plant(i); } finally { nav.busy = false; H.emit('nav'); }
+  };
+  // Double-click selects the word under the cursor; going somewhere shouldn't leave that behind.
+  H.dblGoTo = (e, i) => { e.preventDefault(); e.view.getSelection().removeAllRanges(); H.goTo(i); };
   H.exportAll = () => api('/api/export', 'POST');
   // Likes: most recent first. Any heart toggles; every frame updates its hearts on the 'likes' event.
   H.likedList = () => H.data.liked.map(id => H.data.byId[id]).filter(i => i != null);
@@ -172,8 +302,8 @@
   };
   H.player = player;
   audio.addEventListener('ended', () => player.next());
-  audio.addEventListener('play', () => { renderPlayer(true); breathe(true); H.emit('playstate', true); });
-  audio.addEventListener('pause', () => { renderPlayer(true); breathe(false); H.emit('playstate', false); });
+  audio.addEventListener('play', () => { renderPlayer(true); H.emit('playstate', true); });
+  audio.addEventListener('pause', () => { renderPlayer(true); H.emit('playstate', false); });
   audio.addEventListener('timeupdate', () => {
     const el = document.getElementById('player'), dur = audio.duration || 0;
     const p = el.querySelector('.prog'), tm = el.querySelector('.ptime');
@@ -184,12 +314,6 @@
     try {
       for (const [a, f] of [['play', 'toggle'], ['pause', 'toggle'], ['nexttrack', 'next'], ['previoustrack', 'prev']]) navigator.mediaSession.setActionHandler(a, () => player[f]());
     } catch (e) {}
-  }
-  // The now-playing mark breathes on every map while audio plays: maps restyle only when the state flips.
-  let breathT = null;
-  function breathe(on) {
-    if (on && !breathT) { let s = 0; breathT = setInterval(() => H.emit('breathe', (s = 1 - s)), 450); }
-    else if (!on && breathT) { clearInterval(breathT); breathT = null; H.emit('breathe', 0); }
   }
 
   function renderPlayer(stateOnly) {
@@ -203,18 +327,16 @@
       return;
     }
     const t = H.data.tracks[i], col = H.leafColor(t.cluster);
-    let s = i * 9301 + 49297;
-    const bars = Array.from({ length: 90 }, () => { s = (s * 9301 + 49297) % 233280; return 18 + (s / 233280) * 82; });
     el.innerHTML = `<div class="ptransport">
         <button data-p="prev" title="${H.t('prev')}">⏮</button>
         <button data-p="toggle" class="pplay" title="${H.t('playPause')}">${audio.paused ? '▶' : '❚❚'}</button>
         <button data-p="next" title="${H.t('next')}" ${player.pos >= player.queue.length - 1 ? 'disabled' : ''}>⏭</button></div>
       <span class="eq"><i></i><i></i><i></i><i></i></span>
-      ${H.heart(i)}
-      <span class="pdot dot" style="--c:${col}"></span>
-      <div class="pmeta"><b>${H.esc(t.title)}</b><span>${H.esc(t.artist)}</span></div>
+      ${H.heart(i)}<button class="addpl" data-p="addpl" title="${H.t('addToPl')}">＋</button>
+      <span class="part" style="--c:${col};background-image:url(/art/${t.id}?s=96)"></span>
+      <div class="pmeta" title="${H.t('goToTip')}"><b>${H.esc(t.title)}</b><span>${H.esc(t.artist)}</span></div>
       <span class="pfacts">${t.bpm ?? '—'} <small>BPM</small> · ${t.key ?? '—'} · ${H.esc((t.ext || '').toUpperCase())}</span>
-      <div class="wave" data-p="seek" title="${H.t('seek')}">${bars.map(h => `<i style="height:${h}%"></i>`).join('')}<div class="prog"></div></div>
+      <div class="wave" data-p="seek" title="${H.t('seek')}"><div class="prog"></div></div>
       <span class="ptime">0:00 / ${H.fmtDur(t.dur)}</span>
       <span class="pqueue">${H.esc(player.label || H.t('queue'))}<br><span class="n">${player.pos + 1} / ${player.queue.length}</span></span>`;
   }
@@ -229,8 +351,10 @@
   document.addEventListener('click', e => {
     const b = e.target.closest('#player [data-p]'); if (!b || b.disabled) return;
     if (b.dataset.p === 'seek') { const r = b.getBoundingClientRect(); player.seek((e.clientX - r.left) / r.width); }
+    else if (b.dataset.p === 'addpl') H.playlistMenu(b, [player.current]);
     else player[b.dataset.p]();
   });
+  document.addEventListener('dblclick', e => { if (e.target.closest('#player .pmeta')) H.dblGoTo(e, player.current); });
 
   // ---- help layer + global keys (frames forward their keydowns here) ----
   H.applyHelp = doc => doc.body && doc.body.classList.toggle('show-help', H.help);
@@ -242,13 +366,20 @@
   };
   H.key = e => {
     if (e.ctrlKey && e.altKey && e.shiftKey && e.code === 'KeyD') { e.preventDefault(); H.setHelp(!H.help); H.toast(H.t(H.help ? 'helpOn' : 'helpOff')); return true; }
+    if (e.metaKey && (e.key === '[' || e.key === ']')) { e.preventDefault(); e.key === '[' ? H.back() : H.forward(); return true; }
     if (e.target.closest && e.target.closest('input, select, textarea, [contenteditable]')) return false;
+    if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); e.key === 'ArrowLeft' ? H.back() : H.forward(); return true; }
     if (e.code === 'Space') { e.preventDefault(); player.toggle(); return true; }
     if (e.shiftKey && e.key === 'ArrowRight') { player.next(); return true; }
     if (e.shiftKey && e.key === 'ArrowLeft') { player.prev(); return true; }
     return false;
   };
   document.addEventListener('keydown', e => H.key(e));
+  // Mouse side buttons (frames forward theirs too).
+  H.mouse = e => { if (e.button === 3) { e.preventDefault(); H.back(); } if (e.button === 4) { e.preventDefault(); H.forward(); } };
+  document.addEventListener('mouseup', e => H.mouse(e));
+  // Every document (host and frames) reports its mousedowns, so popups can close on a click in another frame.
+  document.addEventListener('mousedown', () => H.emit('mousedown', document), true);
 
   H.toast = msg => {
     let el = document.getElementById('toast');
