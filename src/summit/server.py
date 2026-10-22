@@ -3,6 +3,7 @@ clusters, playlists, vibes and export. The desktop UI lives in web/ (same origin
 same API, plus /stream (phone-friendly audio) and /art (cover art)."""
 
 import json
+import subprocess
 import threading
 
 import numpy as np
@@ -11,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import clap_text, db
-from .config import DEFAULT_SPACE, MAX_DURATION, SPACES, TAG_SPACE, WEB
+from .config import DEFAULT_SPACE, MAX_DURATION, ROOT, SPACES, TAG_SPACE, WEB
 from .export import export_all
 from .layout import load, space_matrix, unit
 from .media import TYPES, Prefetch, art_file, stream_file
@@ -126,6 +127,16 @@ class Library:
         return out
 
 
+def git_version() -> str:
+    """The code this server is running, in the same form as the phone app's version: 0.1.<commits> (<hash>[-dirty])."""
+    git = lambda *a: subprocess.run(["git", *a], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+    try:
+        return f"0.1.{git('rev-list', '--count', 'HEAD')} ({git('describe', '--always', '--dirty')})"
+    except OSError:
+        return "unknown"
+
+
+VERSION = git_version()
 app = FastAPI(title="Summit")
 lib: Library | None = None
 job = Job(on_done=lambda: lib.reload())
@@ -168,6 +179,11 @@ def _startup() -> None:
 @app.get("/")
 def index():
     return FileResponse(WEB / "index.html")
+
+
+@app.get("/api/version")
+def version():
+    return {"version": VERSION}
 
 
 @app.get("/api/library")

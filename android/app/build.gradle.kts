@@ -4,6 +4,11 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+// Version from git, so every build says which commit it is: 0.1.<commits> (<hash>), "-dirty" if built with uncommitted changes.
+fun git(vararg args: String) = providers.exec { commandLine("git", *args) }.standardOutput.asText.get().trim()
+val commits = git("rev-list", "--count", "HEAD").toInt()
+val describe = git("describe", "--always", "--dirty")
+
 android {
     namespace = "com.willlauer.summit"
     compileSdk = 37
@@ -12,8 +17,8 @@ android {
         applicationId = "com.willlauer.summit"
         minSdk = 31
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = commits
+        versionName = "0.1.$commits ($describe)"
     }
     buildTypes {
         release {
@@ -21,7 +26,7 @@ android {
             signingConfig = signingConfigs.getByName("debug")  // sideloaded onto one phone
         }
     }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
 }
 
 dependencies {

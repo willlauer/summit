@@ -25,6 +25,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.willlauer.summit.BuildConfig
 import com.willlauer.summit.data.Status
 import kotlinx.coroutines.launch
 
@@ -127,6 +128,8 @@ fun SettingsScreen(bottomPad: androidx.compose.ui.unit.Dp) {
     val app = LocalApp.current
     val status by app.repo.status.collectAsStateWithLifecycle()
     var url by remember { mutableStateOf(app.repo.serverUrl) }
+    var serverVersion by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(status) { serverVersion = runCatching { app.repo.api.version() }.getOrElse { "not reachable" } }
     Column(Modifier.fillMaxSize().padding(bottom = bottomPad)) {
         Header("Settings", back = true)
         Column(Modifier.padding(16.dp)) {
@@ -147,6 +150,10 @@ fun SettingsScreen(bottomPad: androidx.compose.ui.unit.Dp) {
             Spacer(Modifier.height(24.dp))
             Text("Reach your Mac from anywhere with Tailscale: run `tailscale serve --bg 8766` on the Mac and use the https://….ts.net address it prints. "
                 + "Over USB during development, `adb reverse tcp:8766 tcp:8766` makes http://127.0.0.1:8766 work.", style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.height(24.dp))
+            Text("Version", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            Text("App ${BuildConfig.VERSION_NAME}\nMac ${serverVersion ?: "…"}", style = MaterialTheme.typography.bodySmall, color = C.Muted)
         }
     }
 }
