@@ -235,6 +235,9 @@ class GalaxyView(context: Context) : GLSurfaceView(context) {
             val f = exp(-dt / 260f); velX *= f; velY *= f
             if (hypot(velX, velY) / worldPerPx() < 0.02f) { velX = 0f; velY = 0f } else moving = true
         }
+        if (showcaseTurn != 0f && morph > 0.5f) {  // README recordings: a steady orbit
+            goal.th = wrap(goal.th + showcaseTurn * dt / 1000f); cam.th = goal.th; moving = true
+        }
         val k = 1 - exp(-dt / 70f)
         fun approach(c: Float, g: Float, eps: Float): Float { val d = g - c; return if (abs(d) > eps) { moving = true; c + d * k } else g }
         cam.tx = approach(cam.tx, goal.tx, 1e-4f); cam.ty = approach(cam.ty, goal.ty, 1e-4f); cam.tz = approach(cam.tz, goal.tz, 1e-4f)
@@ -266,7 +269,11 @@ class GalaxyView(context: Context) : GLSurfaceView(context) {
     private val born = System.nanoTime()
     // The wind: only the sky redraws (no re-projecting tracks), ~30 times a second while the map is on screen.
     private val ambient = object : Runnable {
-        override fun run() { renderer.time = (System.nanoTime() - born) / 1e9f; if (w > 0 && renderer.wind) requestRender(); postDelayed(this, 33) }
+        override fun run() {
+            renderer.time = (System.nanoTime() - born) / 1e9f; if (w > 0 && renderer.wind) requestRender()
+            if (showcaseTurn != 0f) kick()
+            postDelayed(this, 33)
+        }
     }
     override fun onAttachedToWindow() { super.onAttachedToWindow(); post(ambient) }
     override fun onDetachedFromWindow() { removeCallbacks(ambient); super.onDetachedFromWindow() }
@@ -351,6 +358,8 @@ class GalaxyView(context: Context) : GLSurfaceView(context) {
     }
 
     companion object {
+        /** Radians per second the 3D map turns by itself; debug builds set it from an intent (see MainActivity). */
+        var showcaseTurn = 0f
         private const val FOV = 35f
         private val TAN = tan(FOV / 2 * PI / 180).toFloat()
         private fun ease(t: Float) = 1 - (1 - t).pow(3)
