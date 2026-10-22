@@ -9,6 +9,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
@@ -34,8 +35,16 @@ class PlaybackService : MediaSessionService() {
             .setUpstreamDataSourceFactory(upstream)
             .setCacheKeyFactory { spec -> spec.uri.lastPathSegment ?: spec.uri.toString() }
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+        // Read far ahead (the rest of the song and into the next) so a patchy connection doesn't stall playback;
+        // the default ~50 s / ~3 MB runs dry on cellular. 10 min of 256k AAC or 320k MP3 is under 25 MB.
+        val load = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(5 * 60_000, 10 * 60_000, 1_500, 3_000)
+            .setTargetBufferBytes(32 shl 20)
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
         val player = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(data))
+            .setLoadControl(load)
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
