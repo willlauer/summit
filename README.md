@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/map-3d-classic.gif" width="300" alt="The sound map in 3D, rotating">
+  <img src="docs/images/map-3d.gif" width="300" alt="The sound map in 3D, orbiting">
 </p>
 
 ---
@@ -36,32 +36,36 @@ playlists go straight to rekordbox.
 
 <table>
   <tr>
-    <td align="center"><img src="docs/images/map-classic.png" width="220"><br><sub>The map (Classic look)</sub></td>
+    <td align="center"><img src="docs/images/map.png" width="220"><br><sub>The map, with named genre families</sub></td>
     <td align="center"><img src="docs/images/search.png" width="220"><br><sub>Search by vibe</sub></td>
-    <td align="center"><img src="docs/images/now-playing-classic.png" width="220"><br><sub>Now playing: BPM, key, genre</sub></td>
+    <td align="center"><img src="docs/images/now-playing.png" width="220"><br><sub>Now playing: BPM, key, genre</sub></td>
   </tr>
   <tr>
     <td align="center"><img src="docs/images/similar.png" width="220"><br><sub>Tracks that sound similar</sub></td>
     <td align="center"><img src="docs/images/playlists.png" width="220"><br><sub>Playlists, synced with the Mac</sub></td>
-    <td align="center"><img src="docs/images/map-pixel.png" width="220"><br><sub>The map (Pixel look)</sub></td>
+    <td align="center"><img src="docs/images/library.png" width="220"><br><sub>The whole library, A to Z</sub></td>
   </tr>
 </table>
 
-<details>
-<summary>More: the 3D map in the Pixel look, Now Playing, Library</summary>
-<br>
-<p align="center">
-  <img src="docs/images/map-3d-pixel.gif" width="260">
-  <img src="docs/images/now-playing-pixel.png" width="260">
-  <img src="docs/images/library.png" width="260">
-</p>
-</details>
-
 ## How it works
 
-```
- Music library ──scan──▶ index ──analyze──▶ embeddings, styles, BPM, key ──layout──▶ map + clusters ──label──▶ names
- (~/Music)                SQLite             CLAP · Discogs-EffNet                     UMAP · HDBSCAN          Discogs styles
+### Building the map
+
+```mermaid
+flowchart LR
+    lib[("🎵 Music library<br/><i>~/Music</i>")]
+    scan["<b>1 · Scan</b><br/>index audio files"]
+    analyze["<b>2 · Analyze</b><br/>CLAP + Discogs-EffNet<br/>styles · BPM · key"]
+    layout["<b>3 · Layout</b><br/>UMAP maps<br/>HDBSCAN clusters"]
+    label["<b>4 · Label</b><br/>names from<br/>Discogs styles"]
+    db[("🗺️ The map<br/><i>SQLite</i>")]
+
+    lib --> scan --> analyze --> layout --> label --> db
+
+    classDef step fill:#10233a,stroke:#5fd3f3,stroke-width:2px,color:#e6f6ff
+    classDef store fill:#1c1236,stroke:#b48cff,stroke-width:2px,color:#f1eaff
+    class scan,analyze,layout,label step
+    class lib,db store
 ```
 
 1. **Scan** indexes `~/Music/Music/Media.localized`. It's incremental and takes seconds. Files shorter than 60 s
@@ -73,8 +77,39 @@ playlists go straight to rekordbox.
 4. **Label** names each cluster from its most distinctive Discogs styles, so sub-clusters contrast with their
    siblings. You can rename either level in the app.
 
-A FastAPI server serves the library, audio and API to both apps. Your data lives in `data/` and never leaves your
-machine except to stream to your own phone.
+`summit update` runs all four steps, and each one only processes what changed.
+
+### Where everything runs
+
+```mermaid
+flowchart TB
+    subgraph mac["💻 Your Mac"]
+        direction LR
+        db[("Library<br/><i>SQLite</i>")]
+        server["<b>Summit server</b><br/>FastAPI · :8766"]
+        desktop["<b>Desktop app</b><br/>Map · Tag · Flow · Tree"]
+        xml[("summit.xml")]
+        desktop <--> server <--> db
+        server -- export --> xml
+    end
+
+    phone["📱 <b>Android app</b><br/>map · search · player"]
+    rb["🎛️ <b>rekordbox</b>"]
+
+    server <-- "Tailscale (HTTPS)<br/>library · audio · playlists" --> phone
+    xml -- "Import Playlist" --> rb
+
+    classDef app fill:#10233a,stroke:#5fd3f3,stroke-width:2px,color:#e6f6ff
+    classDef store fill:#1c1236,stroke:#b48cff,stroke-width:2px,color:#f1eaff
+    classDef ext fill:#13261c,stroke:#5ff3a6,stroke-width:2px,color:#e6fff1
+    class server,desktop,phone app
+    class db,xml store
+    class rb ext
+    style mac fill:#0a1522,stroke:#2f5677,stroke-width:1px,stroke-dasharray:5 4,color:#cfe6f5
+```
+
+One FastAPI server on your Mac serves the library, audio and API to both apps. Your data lives in `data/` and never
+leaves the Mac except to stream to your own phone over your private tailnet.
 
 ## Getting started
 
