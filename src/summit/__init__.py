@@ -8,7 +8,7 @@
     summit update               # scan + analyze + layout + label: bring the map up to date with the library
     summit app [--browser]      # native window (or server only)
     summit serve                # server only, in the foreground (the phone app is at /m/)
-    summit service install|uninstall   # run the server in the background at login
+    summit service install|uninstall|restart   # run the server in the background at login
     summit transcode            # convert lossless tracks for the phone now instead of on first play
     summit bundle               # build ~/Applications/Summit.app (launcher for this checkout)
     summit export               # rekordbox XML + m3u8 for all playlists
@@ -35,11 +35,17 @@ def main() -> None:
     sub.add_parser("bundle")
     sub.add_parser("serve")
     sv = sub.add_parser("service")
-    sv.add_argument("action", choices=["install", "uninstall"])
+    sv.add_argument("action", choices=["install", "uninstall", "restart"])
     sub.add_parser("transcode")
     sub.add_parser("export")
     sub.add_parser("status")
     args = ap.parse_args()
+    if args.cmd in ("scan", "analyze", "layout", "layout3d", "label", "update"):
+        import atexit
+
+        from .pipeline import notify_server
+
+        atexit.register(notify_server)  # also after Ctrl-C: every step saves as it goes
 
     if args.cmd == "scan":
         from .scan import scan
@@ -76,7 +82,7 @@ def main() -> None:
     elif args.cmd == "service":
         from . import service
 
-        print(service.install() if args.action == "install" else service.uninstall())
+        print({"install": service.install, "uninstall": service.uninstall, "restart": service.restart}[args.action]())
     elif args.cmd == "transcode":
         from . import db
         from .media import transcode_all

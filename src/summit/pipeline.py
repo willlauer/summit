@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 import threading
+import urllib.request
 from collections import deque
 
 from . import db
@@ -37,6 +38,20 @@ def update(log=print) -> None:
     log("== done")
 
 
+def notify_server() -> None:
+    """Tell a running server to reload, so a terminal run shows up without restarting it. The server's own job reloads
+    when it finishes, so its subprocess skips this."""
+    if os.environ.get("SUMMIT_JOB"):
+        return
+    from .app import PORT
+
+    try:
+        urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{PORT}/api/reload", method="POST"), timeout=120)
+        print("server reloaded")
+    except OSError:
+        pass  # not running: it loads everything when it starts
+
+
 # Progress lines the steps print: "  scanned 500/3900", "  96/400 · 2.1 tracks/s …", and "analyze: 400 tracks · …" (the total).
 PROGRESS = re.compile(r"^\s+(?:scanned )?(\d+)/(\d+)")
 TOTAL = re.compile(r"^analyze: (\d+) tracks")
@@ -60,6 +75,7 @@ class Job:
         self.proc = subprocess.Popen(
             [sys.executable, "-u", "-m", "summit", "update"], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, start_new_session=True,  # own process group, so stop() also reaches analyze's workers
+            env={**os.environ, "SUMMIT_JOB": "1"},
         )
         threading.Thread(target=self._read, args=(self.proc,), daemon=True).start()
         return True

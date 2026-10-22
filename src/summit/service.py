@@ -1,6 +1,7 @@
 """Keep Summit's server running in the background (a login item), so the phone can reach it while the Mac is up.
 The desktop window attaches to it instead of starting its own."""
 
+import os
 import plistlib
 import subprocess
 import sys
@@ -32,3 +33,10 @@ def uninstall(quiet: bool = False) -> str:
         PLIST.unlink()
         return f"removed {PLIST}"
     return "" if quiet else "not installed"
+
+
+def restart() -> str:
+    if not PLIST.exists():
+        return "not installed (summit service install)"
+    subprocess.run(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{LABEL}"], check=True)
+    return f"restarted {LABEL}"

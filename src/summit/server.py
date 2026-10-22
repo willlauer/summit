@@ -362,6 +362,13 @@ def library_pending():
     return {**({} if job.running else pending(lib.con)), "job": job.state()}
 
 
+@app.post("/api/reload")
+def reload_library():
+    """Called by terminal runs of scan / analyze / layout / label / update (pipeline.notify_server)."""
+    lib.reload()
+    return {"ok": True}
+
+
 @app.get("/api/update")
 def update_state():
     return job.state()

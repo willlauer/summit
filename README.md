@@ -12,7 +12,9 @@ uv run summit export      # rekordbox XML + m3u8 for all playlists → data/expo
 uv run summit status
 ```
 
-After adding music: `scan`, `analyze`, `layout`, then reopen the app. Files shorter than 60 s or longer than 12 min
+After adding music: `summit update` (scan + analyze + layout + label), then reload the app. Terminal runs tell a running
+server to reload, so the desktop and phone apps see the new tracks on their next refresh; `summit service restart`
+restarts the background server (e.g. after a code change). Files shorter than 60 s or longer than 12 min
 (samples, DJ mixes, recordings) are ignored; `scan` removes any that were indexed before.
 
 **Modes:** Map (explore, playlists, cluster names; 3D toggle) · Tag (bulk tagging) · Flow (route a set through the map) ·
