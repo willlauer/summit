@@ -14,12 +14,17 @@ import kotlinx.coroutines.launch
 sealed interface Sheet {
     data class Track(val i: Int, val playlistId: Int? = null) : Sheet   // song actions (in a playlist: also "remove")
     data class AddTo(val idxs: List<Int>) : Sheet                       // pick a playlist to add to
+    data class MoveTo(val playlistId: Int? = null, val folderId: Int? = null) : Sheet  // pick a folder for a playlist or folder
+    data class FolderActions(val id: Int) : Sheet
     data object Active : Sheet                                          // pick the playlist being built
     data object MapOptions : Sheet
 }
 
 sealed interface Dialog {
-    data class NewPlaylist(val add: List<Int> = emptyList(), val makeActive: Boolean = false) : Dialog
+    data class NewPlaylist(val add: List<Int> = emptyList(), val makeActive: Boolean = false, val folder: Int? = null) : Dialog
+    data class NewFolder(val parent: Int? = null, val movePlaylist: Int? = null, val moveFolder: Int? = null) : Dialog  // optionally file something in it
+    data class RenameFolder(val id: Int) : Dialog
+    data class DeleteFolder(val id: Int) : Dialog
     data class Rename(val id: Int) : Dialog
     data class Delete(val id: Int) : Dialog
 }

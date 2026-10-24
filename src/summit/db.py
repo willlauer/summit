@@ -90,6 +90,13 @@ def migrate(con: sqlite3.Connection) -> None:
     if "version" not in {r[1] for r in con.execute("PRAGMA table_info(playlists)")}:
         con.execute("ALTER TABLE playlists ADD COLUMN version INTEGER DEFAULT 0")
         con.commit()
+    # Folders of playlists (nestable), mirrored as folders in the rekordbox export. A playlist sits in one folder or none.
+    if not con.execute("SELECT 1 FROM sqlite_master WHERE name='folders'").fetchone():
+        con.execute("CREATE TABLE folders (id INTEGER PRIMARY KEY, name TEXT, parent_id INTEGER, created_at REAL, updated_at REAL)")
+        con.commit()
+    if "folder_id" not in {r[1] for r in con.execute("PRAGMA table_info(playlists)")}:
+        con.execute("ALTER TABLE playlists ADD COLUMN folder_id INTEGER")
+        con.commit()
     for table in ("layouts", "clusters"):
         cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
         if "family" not in cols:

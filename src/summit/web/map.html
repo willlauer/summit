@@ -13,7 +13,16 @@
   .panel { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); }
   .panel .tabs { padding: 0 10px; border-bottom: 1px solid var(--line); }
   .body { padding: 14px 16px; overflow: auto; flex: 1; }
-  .pl { display: flex; align-items: center; gap: 8px; padding: 8px 4px; border-top: 1px solid var(--line-soft); }
+  .pl { display: flex; align-items: center; gap: 8px; padding: 8px 4px 8px calc(var(--d, 0) * 18px + 4px); border-top: 1px solid var(--line-soft); }
+  .pl .grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pl[draggable="true"] { cursor: grab; }
+  .pl.dragging { opacity: .4; }
+  .fold .grow { cursor: pointer; font-weight: 600; }
+  .fold .tools { visibility: hidden; display: flex; }
+  .fold:hover .tools { visibility: visible; }
+  .pl.drop-into { box-shadow: inset 0 0 0 1px var(--cyan); background: rgba(62, 230, 255, .06); }
+  .droptop { display: none; justify-content: center; color: var(--muted); font-size: 12px; border: 1px dashed var(--line); border-radius: 8px; margin-top: 6px; }
+  .tree-drag .droptop { display: flex; }
   .note { position: absolute; left: 16px; bottom: 16px; max-width: 320px; padding: 12px 14px; z-index: 5; font-size: 12px; color: var(--muted); }
 </style>
 </head>
@@ -62,7 +71,7 @@ S.ready.then(() => {
         const p = st.selKind === 'playlist' && S.data.playlists.find(p => p.id === st.selId);
         if (p) st.sel = H.playlistTracks(p);  // it may have been edited since
         S.focus(map, st.sel.length ? st.sel : null);
-        st.nbrs = st.cur == null ? [] : await H.neighbors(st.cur, 10);
+        st.nbrs = st.cur == null ? [] : await H.neighbors(st.cur, H.similarN);
         S.highlight(map, st.cur == null ? [] : [st.cur, ...st.nbrs], H.space);
         if (v.space === H.space) S.setRange(map, v.range);
         setTab(st.tab);
@@ -74,7 +83,7 @@ S.ready.then(() => {
 
 async function showTrack(i) {
   st.cur = i;
-  st.nbrs = await H.neighbors(i, 10);
+  st.nbrs = await H.neighbors(i, H.similarN);
   S.highlight(map, [i, ...st.nbrs], H.space);
   setTab('track');
 }
@@ -106,7 +115,7 @@ function trackHTML() {
     <h3>${t_('tags')}</h3>${t.confirmed.length ? t.confirmed.map(g => S.chip(g, { removable: true, i: t.i })).join('') : `<span class="muted">${t_('untagged')}</span>`}
     <h3>${t_('suggested')}</h3>${sug.length ? sug.map(g => S.chip(g, { suggested: true, score: sc[g][t.i], i: t.i })).join('') : `<span class="muted">${t_('nothingAbove')}</span>`}
     <h3>${t_('styles')}</h3>${t.styles.map(([s, v]) => `<div class="meter"><span>${S.esc(s)}</span><div class="track"><b style="width:${Math.min(100, v * 100)}%"></b></div></div>`).join('')}
-    <h3>${t_('soundsLike')}</h3>${st.nbrs.map(j => trackRow(j, 'nbrs')).join('')}`;
+    <h3 style="display:flex;align-items:center;gap:8px">${t_('soundsLike')} <select id="nbrN" class="small" title="${t_('similarNTip')}">${[10, 25, 50, 100, 250].map(n => `<option ${n === H.similarN ? 'selected' : ''}>${n}</option>`).join('')}</select></h3>${st.nbrs.map(j => trackRow(j, 'nbrs')).join('')}`;
 }
 
 function selectionHTML() {
@@ -129,12 +138,28 @@ function selectionHTML() {
       : `<h3>${t_('tracks')}</h3>${st.sel.slice(0, 60).map(j => trackRow(j, 'sel')).join('')}${st.sel.length > 60 ? `<div class="muted small" style="padding:6px">${t_('andMore', { n: st.sel.length - 60 })}</div>` : ''}`}`;
 }
 
+// Folders closed in this browser (open is the default).
+let closedFolders = new Set();
+try { closedFolders = new Set(JSON.parse(localStorage.getItem('summit.closedFolders') || '[]')); } catch (e) {}
+const saveClosed = () => { try { localStorage.setItem('summit.closedFolders', JSON.stringify([...closedFolders])); } catch (e) {} };
+
+// The playlist tree: each folder's subfolders, then its playlists, as in the rekordbox export.
 function playlistsHTML() {
-  const pls = S.data.playlists;
-  return `${pls.length ? pls.map(p => `<div class="pl"><span class="grow">${S.esc(p.name)} <span class="muted small">· ${t_('nTracks', { n: p.ids.length })}${p.kind === 'flow' ? t_('flowKind') : ''}</span></span>
-      <button class="small ghost" data-act="showpl" data-id="${p.id}">${t_('show')}</button><button class="small danger" data-act="delpl" data-id="${p.id}">×</button></div>`).join('') : `<div class="empty">${t_('noPlaylists')}</div>`}
-    <div class="actions"><button class="primary" data-act="export" ${pls.length || S.data.liked.length ? '' : 'disabled'}>${t_('exportRb')}</button></div>
-    <p class="hint">${t_('exportHint')}</p>`;
+  const pls = S.data.playlists, fs = S.data.folders, known = new Set(fs.map(f => f.id));
+  const home = id => (known.has(id) ? id : null);  // a dangling folder id counts as the top level
+  const inside = fid => pls.filter(p => home(p.folder) === fid).length + fs.filter(f => home(f.parent) === fid).reduce((a, f) => a + inside(f.id), 0);
+  const plRow = (p, d) => `<div class="pl" draggable="true" data-drag="pl:${p.id}" style="--d:${d}"><span class="grow">${S.esc(p.name)} <span class="muted small">· ${t_('nTracks', { n: p.ids.length })}${p.kind === 'flow' ? t_('flowKind') : ''}</span></span>
+      <button class="small ghost" data-act="showpl" data-id="${p.id}">${t_('show')}</button><button class="small danger" data-act="delpl" data-id="${p.id}">×</button></div>`;
+  const level = (fid, d) => fs.filter(f => home(f.parent) === fid).map(f => {
+    const open = !closedFolders.has(f.id);
+    return `<div class="pl fold" draggable="true" data-drag="f:${f.id}" data-drop="${f.id}" style="--d:${d}">
+        <span class="grow" data-act="fold" data-id="${f.id}"><span class="muted">${open ? '▾' : '▸'}</span> ${S.esc(f.name)} <span class="muted small" style="font-weight:400">· ${t_('nPlaylists', { n: inside(f.id) })}</span></span>
+        <span class="tools"><button class="bare" data-act="plin" data-id="${f.id}" title="${t_('plInFolder')}">＋</button><button class="bare" data-act="subf" data-id="${f.id}" title="${t_('subfolder')}">⊞</button><button class="bare" data-act="renf" data-id="${f.id}" title="${t_('renameTip')}">✎</button><button class="bare" data-act="delf" data-id="${f.id}" title="${t_('deleteFolderTip')}">×</button></span></div>`
+      + (open ? level(f.id, d + 1) : '');
+  }).join('') + pls.filter(p => home(p.folder) === fid).map(p => plRow(p, d)).join('');
+  return `${pls.length || fs.length ? level(null, 0) + `<div class="pl droptop" data-drop="0">${t_('topLevel')}</div>` : `<div class="empty">${t_('noPlaylists')}</div>`}
+    <div class="actions"><button class="primary" data-act="export" ${pls.length || S.data.liked.length ? '' : 'disabled'}>${t_('exportRb')}</button><button data-act="newf">${t_('newFolder')}</button></div>
+    <p class="hint">${fs.length ? t_('dragToFolder') + ' ' : ''}${t_('exportHint')}</p>`;
 }
 
 function likedHTML() {
@@ -184,8 +209,22 @@ body.addEventListener('click', async e => {
     }
     if (a === 'delpl') { const p = S.data.playlists.find(p => p.id === +el.dataset.id); if (confirm(t_('deletePl', { x: p.name }))) await H.deletePlaylist(p.id); }
     if (a === 'export') { const r = await H.exportAll(); S.toast(t_('exported', { p: r.playlists, n: r.tracks })); return; }
+    const f = S.data.folders.find(f => f.id === +el.dataset.id);
+    if (a === 'fold') { closedFolders.has(f.id) ? closedFolders.delete(f.id) : closedFolders.add(f.id); saveClosed(); }
+    if (a === 'newf' || a === 'subf') {
+      const n = prompt(t_('folderName'), t_('newFolderName'));
+      if (n && n.trim()) { await H.createFolder(n.trim(), a === 'subf' ? f.id : null); if (f) { closedFolders.delete(f.id); saveClosed(); } }
+    }
+    if (a === 'plin') { const n = prompt(t_('playlistName'), t_('newPlaylist')); if (n) { await H.createPlaylist(n, [], 'playlist', null, f.id); closedFolders.delete(f.id); saveClosed(); } }
+    if (a === 'renf') { const n = prompt(t_('folderName'), f.name); if (n && n.trim() && n.trim() !== f.name) await H.renameFolder(f.id, n.trim()); }
+    if (a === 'delf' && confirm(t_('deleteFolder', { x: f.name }))) await H.deleteFolder(f.id);
   } catch (err) { S.toast(err.message); }
   setTab(st.tab);
+});
+body.addEventListener('change', async e => {
+  if (e.target.id !== 'nbrN' || st.cur == null) return;
+  H.setSimilarN(+e.target.value);
+  await showTrack(st.cur);
 });
 body.addEventListener('focusout', async e => {
   const { c, f } = e.target.dataset; if (c == null && f == null) return;
@@ -221,7 +260,35 @@ body.addEventListener('drop', async e => {
 });
 body.addEventListener('dragend', () => { dragPos = null; dropMarks(); body.querySelectorAll('.dragging').forEach(r => r.classList.remove('dragging')); });
 
-H.on('space', async s => { S.setSpace(map, s); if (st.cur != null) { st.nbrs = await H.neighbors(st.cur, 10); S.highlight(map, [st.cur, ...st.nbrs], s); } setTab(st.tab); });
+// File playlists and folders by dragging them onto a folder (or the top-level strip that appears while dragging).
+let treeDrag = null;
+const dropInto = () => body.querySelectorAll('.drop-into').forEach(r => r.classList.remove('drop-into'));
+const within = (fid, root) => { for (let f = S.data.folders.find(x => x.id === fid); f; f = S.data.folders.find(x => x.id === f.parent)) if (f.id === root) return true; return false; };
+body.addEventListener('dragstart', e => {
+  const r = e.target.closest('[data-drag]'); if (!r) return;
+  const [kind, id] = r.dataset.drag.split(':');
+  treeDrag = { kind, id: +id }; r.classList.add('dragging'); body.classList.add('tree-drag');
+  e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', r.dataset.drag);
+});
+body.addEventListener('dragover', e => {
+  const r = e.target.closest('[data-drop]'); if (!treeDrag || !r) return;
+  const to = +r.dataset.drop;
+  if (treeDrag.kind === 'f' && to && within(to, treeDrag.id)) return;  // not into itself or its own subfolders
+  e.preventDefault(); dropInto(); r.classList.add('drop-into');
+});
+body.addEventListener('drop', async e => {
+  const r = e.target.closest('[data-drop]'), d = treeDrag; if (!d || !r) return;
+  e.preventDefault();
+  const to = +r.dataset.drop || null;
+  try {
+    if (d.kind === 'pl' && (S.data.playlists.find(p => p.id === d.id) || {}).folder !== to) await H.movePlaylist(d.id, to);
+    if (d.kind === 'f' && (S.data.folders.find(f => f.id === d.id) || {}).parent !== to) await H.moveFolder(d.id, to);
+    if (to) { closedFolders.delete(to); saveClosed(); setTab(st.tab); }
+  } catch (err) { S.toast(err.message); }
+});
+body.addEventListener('dragend', () => { treeDrag = null; dropInto(); body.classList.remove('tree-drag'); });
+
+H.on('space', async s => { S.setSpace(map, s); if (st.cur != null) { st.nbrs = await H.neighbors(st.cur, H.similarN); S.highlight(map, [st.cur, ...st.nbrs], s); } setTab(st.tab); });
 H.on('color', m => S.setColor(map, m));
 H.on('tags', () => { if (H.color !== 'cluster') S.setColor(map, H.color); if (st.tab !== 'playlists') setTab(st.tab); });
 H.on('clusters', () => S.relabel(map));

@@ -47,12 +47,14 @@ fun SearchScreen(ui: SearchUi, bottomPad: Dp) {
     var vibe by remember { mutableStateOf<List<Int>>(emptyList()) }
     var vibeLoading by remember { mutableStateOf(false) }
     var showAll by remember(q) { mutableStateOf(false) }
-    LaunchedEffect(q) {  // "Sounds like": the server's vibe search (CLAP text embedding), after typing pauses
+    val vibeN by app.repo.vibeResults.collectAsStateWithLifecycle()
+    var opts by remember { mutableStateOf(false) }
+    LaunchedEffect(q, vibeN) {  // "Sounds like": the server's vibe search (CLAP text embedding), after typing pauses
         vibe = emptyList()
         if (q.trim().length < 3) return@LaunchedEffect
         delay(350); vibeLoading = true
-        val have = songs.take(50).toSet()
-        vibe = app.repo.vibeSearch(q).filter { it !in have }.take(30)
+        val have = songs.toSet()  // already listed under Songs
+        vibe = app.repo.vibeSearch(q, vibeN + have.size.coerceAtMost(200)).filter { it !in have }.take(vibeN)
         vibeLoading = false
     }
     val focus = remember { FocusRequester() }
@@ -80,6 +82,15 @@ fun SearchScreen(ui: SearchUi, bottomPad: Dp) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     ActiveChip()
                     Spacer(Modifier.weight(1f))
+                    Box {
+                        IconButton(onClick = { opts = true }) { Icon(PI.Gear, "Search options", tint = C.Muted) }
+                        DropdownMenu(opts, { opts = false }, containerColor = C.Raised2) {
+                            Text("“Sounds like” results", Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.labelMedium, color = C.Muted)
+                            listOf(15, 30, 60, 150, 500).forEach { n ->
+                                DropdownMenuItem({ Text("$n" + if (n == vibeN) "  ✓" else "") }, { opts = false; app.repo.setVibeResults(n) })
+                            }
+                        }
+                    }
                     if (songs.isNotEmpty() || vibe.isNotEmpty()) TextButton(onClick = { app.showOnMap(MapFocus(songs.take(100) + vibe, "“$q”")) }) {
                         Icon(PI.Compass, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("On the map")
                     }

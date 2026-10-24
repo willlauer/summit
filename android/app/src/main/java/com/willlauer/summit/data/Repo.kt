@@ -28,10 +28,18 @@ class Repo(private val ctx: Context, val api: Api, private val scope: CoroutineS
     val lib = MutableStateFlow<Library?>(null)
     val status = MutableStateFlow<Status>(Status.Loading)
     val playlists = MutableStateFlow<List<Playlist>>(emptyList())
+    val folders = MutableStateFlow<List<Folder>>(emptyList())
+    val closedFolders = MutableStateFlow(prefs.getStringSet("closedFolders", emptySet())!!.mapNotNull { it.toIntOrNull() }.toSet())
     val liked = MutableStateFlow<List<String>>(emptyList())         // track ids, most recent first
     val active = MutableStateFlow(prefs.getInt("active", -1).takeIf { it >= 0 })
     val space = MutableStateFlow(prefs.getString("space", null) ?: "combined")
     val view3d = MutableStateFlow(prefs.getBoolean("3d", false))
+    /** How many "Sounds like" results search shows. */
+    val vibeResults = MutableStateFlow(prefs.getInt("vibeResults", 30))
+    fun setVibeResults(n: Int) { vibeResults.value = n; prefs.edit().putInt("vibeResults", n).apply() }
+    /** How many tracks "Similar to" lists. */
+    val similarResults = MutableStateFlow(prefs.getInt("similarResults", 25))
+    fun setSimilarResults(n: Int) { similarResults.value = n; prefs.edit().putInt("similarResults", n).apply() }
     var lookKey: String
         get() = prefs.getString("look", null) ?: "pixel"
         set(v) { prefs.edit().putString("look", v).apply() }
@@ -69,6 +77,7 @@ class Repo(private val ctx: Context, val api: Api, private val scope: CoroutineS
         val L = Library(p)
         lib.value = L
         playlists.value = p.playlists
+        folders.value = p.folders
         liked.value = p.liked
         if (space.value !in L.spaces) space.value = L.defaultSpace
         if (active.value != null && p.playlists.none { it.id == active.value }) setActive(null)
@@ -92,13 +101,55 @@ class Repo(private val ctx: Context, val api: Api, private val scope: CoroutineS
             val sig = { ps: List<Playlist> -> ps.joinToString { "${it.id}:${it.version}" } }
             if (sig(fresh) != sig(playlists.value)) playlists.value = fresh
         }
+        runCatching { api.folders() }.onSuccess { fresh -> if (fresh.toSet() != folders.value.toSet()) folders.value = fresh }
     }
 
-    suspend fun create(name: String, idxs: List<Int> = emptyList()): Int? = guard {
+    // ---- folders ----
+    /** "Gig › Warmup": where a playlist is filed. Empty at the top level. */
+    fun folderPath(id: Int?): String {
+        val byId = folders.value.associateBy { it.id }
+        val names = ArrayDeque<String>()
+        val seen = HashSet<Int>()
+        var f = id?.let { byId[it] }
+        while (f != null && seen.add(f.id)) { names.addFirst(f.name); f = f.parent?.let { byId[it] } }
+        return names.joinToString(" › ")
+    }
+    fun toggleFolder(id: Int) {
+        closedFolders.value = if (id in closedFolders.value) closedFolders.value - id else closedFolders.value + id
+        prefs.edit().putStringSet("closedFolders", closedFolders.value.map { it.toString() }.toSet()).apply()
+    }
+    /** A folder and everything below it: where it can't be moved to. */
+    fun subtree(id: Int): Set<Int> = buildSet {
+        fun walk(f: Int) { if (add(f)) folders.value.filter { it.parent == f }.forEach { walk(it.id) } }
+        walk(id)
+    }
+    private fun adoptFolder(f: Folder) { folders.value = folders.value.filter { it.id != f.id } + f }
+    suspend fun createFolder(name: String, parent: Int?): Int? = guard {
+        val f = api.createFolder(name, parent)
+        adoptFolder(f)
+        if (parent != null && parent in closedFolders.value) toggleFolder(parent)  // show the new folder
+        f.id
+    }
+    suspend fun renameFolder(id: Int, name: String) = guard { adoptFolder(api.updateFolder(id, name = name)) }
+    suspend fun moveFolder(id: Int, parent: Int?) = guard { adoptFolder(api.updateFolder(id, parent = parent ?: 0)) }
+    /** Its playlists and subfolders move up a level (on the server), so reload both. */
+    suspend fun deleteFolder(id: Int) = guard {
+        api.deleteFolder(id)
+        folders.value = api.folders()
+        playlists.value = api.playlists()
+    }
+
+    suspend fun move(id: Int, folder: Int?) = guard {
+        val p = playlist(id) ?: return@guard
+        try { adopt(api.updatePlaylist(id, p.version, folder = folder ?: 0)) }
+        catch (c: ConflictException) { adopt(api.updatePlaylist(id, c.current.version, folder = folder ?: 0)) }
+    }
+
+    suspend fun create(name: String, idxs: List<Int> = emptyList(), folder: Int? = null): Int? = guard {
         val L = lib.value!!
         val ids = idxs.map { L.tracks[it].id }
-        val r = api.createPlaylist(name, ids)
-        playlists.value = playlists.value + Playlist(r.id, name, "playlist", ids, r.version)
+        val r = api.createPlaylist(name, ids, folder)
+        playlists.value = playlists.value + Playlist(r.id, name, "playlist", ids, r.version, folder = folder)
         r.id
     }
 
@@ -165,7 +216,8 @@ class Repo(private val ctx: Context, val api: Api, private val scope: CoroutineS
         return runCatching { api.neighbors(i, k, space.value) }.getOrElse { say("Couldn't reach Summit"); emptyList() }.also { if (it.isNotEmpty()) nbCache[key] = it }
     }
     suspend fun suggest(p: Playlist, k: Int = 20): List<Int> = runCatching { api.suggest(p.ids, k, space.value) }.getOrElse { emptyList() }
-    suspend fun vibeSearch(q: String): List<Int> = runCatching { api.search(q, 40).map { it.i } }.getOrElse { emptyList() }
+    /** Tracks that sound like [q], by sound alone (name matches are listed separately). */
+    suspend fun vibeSearch(q: String, n: Int): List<Int> = runCatching { api.search(q, n, mode = "vibe").map { it.i } }.getOrElse { emptyList() }
     fun prefetch(ids: List<String>) { if (ids.isNotEmpty()) scope.launch { runCatching { api.prefetch(ids) } } }
 
     private suspend fun <T> guard(block: suspend () -> T): T? = try { block() } catch (e: Exception) { say("Couldn't reach Summit: ${e.message}"); null }

@@ -27,7 +27,7 @@ object PI {
             "cube" to Icons.Rounded.ViewInAr, "layers" to Icons.Rounded.Layers, "similar" to Icons.Rounded.Hub, "route" to Icons.Rounded.Route,
             "drag" to Icons.Rounded.DragHandle, "edit" to Icons.Rounded.Edit, "delete" to Icons.Rounded.Delete, "gear" to Icons.Rounded.Settings,
             "snow" to Icons.Rounded.AcUnit, "sparkle" to Icons.Rounded.AutoAwesome, "person" to Icons.Rounded.Person, "link" to Icons.Rounded.Link,
-            "refresh" to Icons.Rounded.Refresh,
+            "refresh" to Icons.Rounded.Refresh, "folder" to Icons.Rounded.Folder,
         )
     }
     private fun icon(name: String, rows: String): ImageVector =
@@ -547,6 +547,19 @@ object PI {
         .#....#.....
         .#....#.....
         ..####......
+        ............""")
+    val Folder get() = icon("folder", """
+        ............
+        ............
+        .####.......
+        .#..#######.
+        .#........#.
+        .##########.
+        .#........#.
+        .#........#.
+        .#........#.
+        .#........#.
+        .##########.
         ............""")
     val Refresh get() = icon("refresh", """
         ............

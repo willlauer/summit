@@ -115,7 +115,7 @@ class Library:
                 "spaceList": [{"key": k, "label": v["label"]} for k, v in SPACES.items() if k in spaces], "defaultSpace": DEFAULT_SPACE,
                 "tags": [dict(r) for r in con.execute("SELECT name, category FROM tags ORDER BY id")],
                 "scores": {} if lite else {t: np.round(v, 2).tolist() for t, v in self.scores.items()},
-                "playlists": self.playlists(), "liked": [i for i in liked if i in self.idx],
+                "playlists": self.playlists(), "folders": self.folders(), "liked": [i for i in liked if i in self.idx],
             }
 
     def playlists(self) -> list[dict]:
@@ -123,8 +123,12 @@ class Library:
         for p in self.con.execute("SELECT * FROM playlists ORDER BY created_at"):
             ids = [r[0] for r in self.con.execute("SELECT track_id FROM playlist_tracks WHERE playlist_id=? ORDER BY position", (p["id"],))]
             out.append({"id": p["id"], "name": p["name"], "kind": p["kind"], "data": json.loads(p["data"] or "null"), "ids": ids,
-                        "version": p["version"] or 0, "updated": p["updated_at"]})
+                        "version": p["version"] or 0, "updated": p["updated_at"], "folder": p["folder_id"]})
         return out
+
+    def folders(self) -> list[dict]:
+        return [{"id": f["id"], "name": f["name"], "parent": f["parent_id"]}
+                for f in self.con.execute("SELECT * FROM folders ORDER BY name COLLATE NOCASE")]
 
 
 def git_version() -> str:
@@ -229,16 +233,19 @@ def art(track_id: str, s: int = 256):
 
 
 @app.get("/api/search")
-def search(q: str, n: int = 60):
+def search(q: str, n: int = 60, mode: str = "both"):
+    """mode: both (name matches first, then by sound) | vibe (by sound only) | name (title / artist matches only)."""
     q = q.strip()
+    n = max(1, min(n, 2000))
     if not q or not lib.ids:
         return []
     ql = q.lower()
     hits = [k for k, i in enumerate(lib.ids) if ql in f"{lib.rows[i]['artist']} {lib.rows[i]['title']}".lower()]
-    if not clap_text.ready():
+    if mode == "name" or not clap_text.ready():
         return [{"i": k, "score": 1.0} for k in hits[:n]]
     sims = lib.C @ clap_text.embed([q], cache=False)[0]
-    sims[hits] += 1.0  # name matches first
+    if mode != "vibe":
+        sims[hits] += 1.0  # name matches first
     top = np.argsort(-sims)[:n]
     lo, hi = float(sims[top[-1]]), float(sims[top[0]])
     return [{"i": int(k), "score": round((float(sims[k]) - lo) / max(hi - lo, 1e-6), 3)} for k in top]
@@ -330,10 +337,11 @@ def _playlist(pid: int) -> dict:
 
 
 @app.post("/api/playlists")
-def create_playlist(name: str = Body(...), ids: list[str] = Body(...), kind: str = Body("playlist"), data: dict | None = Body(None)):
+def create_playlist(name: str = Body(...), ids: list[str] = Body(...), kind: str = Body("playlist"), data: dict | None = Body(None),
+                    folder: int = Body(0)):
     with lib.lock:
-        cur = lib.con.execute("INSERT INTO playlists(name, kind, data, created_at, updated_at, version) VALUES (?,?,?,?,?,1)",
-                              (name, kind, json.dumps(data), db.now(), db.now()))
+        cur = lib.con.execute("INSERT INTO playlists(name, kind, data, created_at, updated_at, version, folder_id) VALUES (?,?,?,?,?,1,?)",
+                              (name, kind, json.dumps(data), db.now(), db.now(), _folder_id(folder)))
         _write_tracks(cur.lastrowid, ids)
         lib.con.commit()
     return {"id": cur.lastrowid, "version": 1}
@@ -341,15 +349,17 @@ def create_playlist(name: str = Body(...), ids: list[str] = Body(...), kind: str
 
 @app.put("/api/playlists/{pid}")
 def update_playlist(pid: int, name: str = Body(None), ids: list[str] = Body(None), data: dict | None = Body(None),
-                    base: int | None = Body(None)):
+                    folder: int | None = Body(None), base: int | None = Body(None)):
     """base: the version the client edited. If the playlist changed since (another device), nothing is written and the
-    reply is 409 with the current playlist, so the client can re-apply its edit to it."""
+    reply is 409 with the current playlist, so the client can re-apply its edit to it. folder: move it there (0: top level)."""
     with lib.lock:
         cur = _playlist(pid)
         if base is not None and base != cur["version"]:
             return JSONResponse({"conflict": True, "playlist": cur}, status_code=409)
         if name is not None:
             lib.con.execute("UPDATE playlists SET name=? WHERE id=?", (name, pid))
+        if folder is not None:
+            lib.con.execute("UPDATE playlists SET folder_id=? WHERE id=?", (_folder_id(folder), pid))
         if data is not None:
             lib.con.execute("UPDATE playlists SET data=? WHERE id=?", (json.dumps(data), pid))
         if ids is not None:
@@ -364,6 +374,62 @@ def delete_playlist(pid: int):
     lib.con.execute("DELETE FROM playlist_tracks WHERE playlist_id=?", (pid,))
     lib.con.execute("DELETE FROM playlists WHERE id=?", (pid,))
     lib.con.commit()
+    return {"ok": True}
+
+
+def _folder_id(fid: int) -> int | None:
+    """A folder id from a client: 0 means the top level."""
+    if not fid:
+        return None
+    if not lib.con.execute("SELECT 1 FROM folders WHERE id=?", (fid,)).fetchone():
+        raise HTTPException(404, "no such folder")
+    return fid
+
+
+@app.get("/api/folders")
+def folders():
+    return lib.folders()
+
+
+@app.post("/api/folders")
+def create_folder(name: str = Body(...), parent: int = Body(0)):
+    with lib.lock:
+        cur = lib.con.execute("INSERT INTO folders(name, parent_id, created_at, updated_at) VALUES (?,?,?,?)",
+                              (name.strip(), _folder_id(parent), db.now(), db.now()))
+        lib.con.commit()
+    return {"id": cur.lastrowid, "name": name.strip(), "parent": _folder_id(parent)}
+
+
+@app.put("/api/folders/{fid}")
+def update_folder(fid: int, name: str = Body(None), parent: int | None = Body(None)):
+    """Rename, or move under another folder (0: top level). A folder can't move into itself or its own subfolders."""
+    with lib.lock:
+        _folder_id(fid)
+        if name is not None:
+            lib.con.execute("UPDATE folders SET name=? WHERE id=?", (name.strip(), fid))
+        if parent is not None:
+            up = _folder_id(parent)
+            while up is not None:
+                if up == fid:
+                    raise HTTPException(400, "a folder can't go inside itself")
+                up = lib.con.execute("SELECT parent_id FROM folders WHERE id=?", (up,)).fetchone()[0]
+            lib.con.execute("UPDATE folders SET parent_id=? WHERE id=?", (_folder_id(parent), fid))
+        lib.con.execute("UPDATE folders SET updated_at=? WHERE id=?", (db.now(), fid))
+        lib.con.commit()
+    return next(f for f in lib.folders() if f["id"] == fid)
+
+
+@app.delete("/api/folders/{fid}")
+def delete_folder(fid: int):
+    """Removes only the folder: its playlists and subfolders move up to its parent."""
+    with lib.lock:
+        _folder_id(fid)
+        parent = lib.con.execute("SELECT parent_id FROM folders WHERE id=?", (fid,)).fetchone()[0]
+        lib.con.execute("UPDATE folders SET parent_id=? WHERE parent_id=?", (parent, fid))
+        lib.con.execute("UPDATE playlists SET folder_id=?, updated_at=?, version=COALESCE(version, 0) + 1 WHERE folder_id=?",
+                        (parent, db.now(), fid))
+        lib.con.execute("DELETE FROM folders WHERE id=?", (fid,))
+        lib.con.commit()
     return {"ok": True}
 
 

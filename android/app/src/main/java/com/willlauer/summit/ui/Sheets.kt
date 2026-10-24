@@ -36,6 +36,8 @@ fun SheetHost() {
             when (sheet) {
                 is Sheet.Track -> TrackSheet(sheet.i, sheet.playlistId)
                 is Sheet.AddTo -> AddToSheet(sheet.idxs)
+                is Sheet.MoveTo -> MoveToSheet(sheet.playlistId, sheet.folderId)
+                is Sheet.FolderActions -> FolderSheet(sheet.id)
                 Sheet.Active -> ActiveSheet()
                 Sheet.MapOptions -> MapOptionsSheet()
             }
@@ -106,12 +108,53 @@ private fun AddToSheet(idxs: List<Int>) {
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text(p.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("${p.ids.size} songs" + if (p.id == active) " · building" else "", style = MaterialTheme.typography.bodySmall)
+                    Text(listOfNotNull("${p.ids.size} songs", app.repo.folderPath(p.folder).ifEmpty { null }, "building".takeIf { p.id == active }).joinToString(" · "),
+                        style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 if (has) Icon(PI.CheckBox, "In this playlist", tint = C.Green)
             }
         }
     }
+}
+
+/** Where to file a playlist ([playlistId]) or a folder ([folderId]; never into itself or its own subfolders). */
+@Composable
+private fun MoveToSheet(playlistId: Int?, folderId: Int?) {
+    val app = LocalApp.current
+    val folders by app.repo.folders.collectAsStateWithLifecycle()
+    val p = playlistId?.let { app.repo.playlist(it) }
+    val f = folderId?.let { id -> folders.find { it.id == id } }
+    val name = p?.name ?: f?.name ?: return
+    val here = if (p != null) p.folder else f?.parent
+    val banned = f?.let { app.repo.subtree(it.id) }.orEmpty()
+    val move = { to: Int? ->
+        app.sheet = null
+        if (to != here) app.scope.launch { if (p != null) app.repo.move(p.id, to) else app.repo.moveFolder(f!!.id, to); app.repo.say("Moved $name") }
+    }
+    Text("Move $name to…", Modifier.padding(horizontal = 24.dp, vertical = 8.dp), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    SheetItem(PI.Add, "New folder…", C.Cyan) { app.sheet = null; app.dialog = Dialog.NewFolder(movePlaylist = p?.id, moveFolder = f?.id) }
+    SheetItem(PI.Queue, "Top level" + if (here == null) " ✓" else "") { move(null) }
+    LazyColumn(Modifier.heightIn(max = 420.dp)) {
+        items(folders.filter { it.id !in banned }.map { it.id to app.repo.folderPath(it.id) }.sortedBy { it.second.lowercase() }, key = { it.first }) { (fid, path) ->
+            SheetItem(PI.Folder, path + if (fid == here) " ✓" else "") { move(fid) }
+        }
+    }
+}
+
+@Composable
+private fun FolderSheet(id: Int) {
+    val app = LocalApp.current
+    val folders by app.repo.folders.collectAsStateWithLifecycle()
+    val f = folders.find { it.id == id } ?: return
+    val path = app.repo.folderPath(f.parent)
+    Text(f.name, Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    if (path.isNotEmpty()) Text("In $path", Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.bodySmall, color = C.Muted)
+    Spacer(Modifier.height(6.dp))
+    SheetItem(PI.PlaylistAdd, "New playlist here") { app.sheet = null; app.dialog = Dialog.NewPlaylist(makeActive = true, folder = f.id) }
+    SheetItem(PI.Folder, "New folder inside") { app.sheet = null; app.dialog = Dialog.NewFolder(parent = f.id) }
+    SheetItem(PI.Edit, "Rename") { app.sheet = null; app.dialog = Dialog.RenameFolder(f.id) }
+    SheetItem(PI.Route, "Move to…") { app.sheet = Sheet.MoveTo(folderId = f.id) }
+    SheetItem(PI.Delete, "Delete folder", C.Magenta) { app.sheet = null; app.dialog = Dialog.DeleteFolder(f.id) }
 }
 
 @Composable
@@ -188,11 +231,32 @@ fun DialogHost() {
     when (d) {
         is Dialog.NewPlaylist -> NameDialog("New playlist", "", if (d.add.isEmpty()) "Create" else "Create and add") { name ->
             app.scope.launch {
-                val id = app.repo.create(name, d.add) ?: return@launch
+                val id = app.repo.create(name, d.add, d.folder) ?: return@launch
                 if (d.makeActive || app.repo.active.value == null) app.repo.setActive(id)
                 app.repo.say(if (d.add.isEmpty()) "Building $name: tap ＋ on songs to add them" else "Added to $name")
             }
             close()
+        }
+        is Dialog.NewFolder -> NameDialog(if (d.parent != null) "New folder in ${app.repo.folderPath(d.parent)}" else "New folder", "", "Create") { name ->
+            app.scope.launch {
+                val id = app.repo.createFolder(name, d.parent) ?: return@launch
+                when {
+                    d.movePlaylist != null -> { app.repo.move(d.movePlaylist, id); app.repo.say("Moved to $name") }
+                    d.moveFolder != null -> { app.repo.moveFolder(d.moveFolder, id); app.repo.say("Moved to $name") }
+                }
+            }
+            close()
+        }
+        is Dialog.RenameFolder -> {
+            val f = app.repo.folders.value.find { it.id == d.id } ?: run { close(); return }
+            NameDialog("Rename folder", f.name, "Rename") { name -> app.scope.launch { app.repo.renameFolder(f.id, name) }; close() }
+        }
+        is Dialog.DeleteFolder -> {
+            val f = app.repo.folders.value.find { it.id == d.id } ?: run { close(); return }
+            AlertDialog(onDismissRequest = close, containerColor = C.Raised2, shape = PxBig,
+                title = { Text("Delete folder “${f.name}”?") }, text = { Text("Only the folder goes: its playlists and folders move up a level.") },
+                confirmButton = { TextButton(onClick = { app.scope.launch { app.repo.deleteFolder(f.id) }; close() }) { Text("Delete", color = C.Magenta) } },
+                dismissButton = { TextButton(onClick = close) { Text("Cancel") } })
         }
         is Dialog.Rename -> {
             val p = app.repo.playlist(d.id) ?: run { close(); return }

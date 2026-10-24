@@ -273,7 +273,7 @@ function renderPlaylist() {
   const list = p ? H.playlistTracks(p) : [], dur = list.reduce((a, j) => a + S.tracks[j].dur, 0), inTree = new Set(visible().map(id => node(id).i));
   const bpms = list.map(j => S.tracks[j].bpm).filter(Boolean).sort((a, b) => a - b);
   document.getElementById('plhead').innerHTML = `<h3>${t_('treePlaylist')}</h3>
-    <select id="plsel"><option value="">${t_('treePickPl')}</option>${pls.map(x => `<option value="${x.id}" ${p && x.id === p.id ? 'selected' : ''}>${S.esc(x.name)} (${x.ids.length})</option>`).join('')}<option value="new">${t_('newPlaylistDots')}</option></select>
+    <select id="plsel"><option value="">${t_('treePickPl')}</option>${pls.map(x => `<option value="${x.id}" ${p && x.id === p.id ? 'selected' : ''}>${S.esc(H.playlistLabel(x))} (${x.ids.length})</option>`).join('')}<option value="new">${t_('newPlaylistDots')}</option></select>
     ${p ? `<div class="stats"><div class="stat"><b>${list.length}</b><span>${t_('tracks')}</span></div><div class="stat"><b>${S.fmtDur(dur)}</b><span>${t_('length')}</span></div>
       ${bpms.length ? `<div class="stat"><b>${bpms[0]}–${bpms[bpms.length - 1]}</b><span>BPM</span></div>` : ''}</div>
       <div class="actions"><button class="primary small" data-act="playall" ${list.length ? '' : 'disabled'}>${t_('playAll')}</button></div>` : ''}`;

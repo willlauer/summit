@@ -95,17 +95,30 @@
   H.familyColor = f => palette().family[f] || PALETTE[0];
 
   // ---- queries ----
+  // Search options (the ⚙ by the search box): how many results, and whether names, sound or both count.
+  H.searchOpts = { n: 60, mode: 'both' };
+  try { Object.assign(H.searchOpts, JSON.parse(localStorage.getItem('summit.search') || '{}')); } catch (e) {}
+  H.setSearchOpts = o => {
+    Object.assign(H.searchOpts, o);
+    try { localStorage.setItem('summit.search', JSON.stringify(H.searchOpts)); } catch (e) {}
+    if (H.query) H.search(H.query);  // re-run what's on show with the new options
+  };
   let searchSeq = 0;
   H.search = async q => {
     const seq = ++searchSeq;
     H.query = q.trim();
     if (!q.trim()) { H.results = null; H.emit('search', null, ''); return null; }
-    const res = await api(`/api/search?q=${encodeURIComponent(q)}&n=60`);
+    const { n, mode } = H.searchOpts;
+    const res = await api(`/api/search?q=${encodeURIComponent(q)}&n=${n}&mode=${mode}`);
     if (seq !== searchSeq) return null;
     H.results = res.map(r => r.i);
     H.emit('search', H.results, q);
     return res;
   };
+  // How many "Sounds like" tracks the Track panel lists (its picker), remembered in this browser.
+  H.similarN = 10;
+  try { H.similarN = +localStorage.getItem('summit.similarN') || 10; } catch (e) {}
+  H.setSimilarN = n => { H.similarN = n; try { localStorage.setItem('summit.similarN', n); } catch (e) {} };
   H.find = q => api(`/api/search?q=${encodeURIComponent(q)}&n=25`);
   const nbCache = {};
   H.neighbors = async (i, k = 10) => {
@@ -144,9 +157,9 @@
     H.data.families[H.space][f].label = label;
     H.emit('clusters');
   };
-  H.createPlaylist = async (name, idxs, kind = 'playlist', data = null) => {
-    const ids = idxs.map(i => H.data.tracks[i].id), res = await api('/api/playlists', 'POST', { name, ids, kind, data });
-    H.data.playlists.push({ id: res.id, name, kind, data, ids, version: res.version });
+  H.createPlaylist = async (name, idxs, kind = 'playlist', data = null, folder = null) => {
+    const ids = idxs.map(i => H.data.tracks[i].id), res = await api('/api/playlists', 'POST', { name, ids, kind, data, folder: folder || 0 });
+    H.data.playlists.push({ id: res.id, name, kind, data, ids, version: res.version, folder });
     H.emit('playlists');
     return res;
   };
@@ -173,6 +186,25 @@
   H.setPlaylistIds = (pid, ids) => put(pid, { ids });
   H.editPlaylist = (pid, edit) => put(pid, { ids: edit(H.data.playlists.find(p => p.id === pid).ids) }, edit);
   H.renamePlaylist = (pid, name) => put(pid, { name });
+  H.movePlaylist = (pid, folder) => put(pid, { folder: folder || 0 });
+  // Folders of playlists, nestable; the rekordbox export mirrors them. Deleting one moves its contents up a level.
+  const sortFolders = () => H.data.folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  H.createFolder = async (name, parent = null) => {
+    const f = await api('/api/folders', 'POST', { name, parent: parent || 0 });
+    H.data.folders.push(f); sortFolders(); H.emit('playlists');
+    return f;
+  };
+  const putFolder = async (fid, body) => {
+    const f = await api(`/api/folders/${fid}`, 'PUT', body);
+    H.data.folders = H.data.folders.map(x => (x.id === fid ? f : x)); sortFolders(); H.emit('playlists');
+  };
+  H.renameFolder = (fid, name) => putFolder(fid, { name });
+  H.moveFolder = (fid, parent) => putFolder(fid, { parent: parent || 0 });
+  H.deleteFolder = async fid => {
+    await api(`/api/folders/${fid}`, 'DELETE');
+    [H.data.playlists, H.data.folders] = await Promise.all([api('/api/playlists'), api('/api/folders')]);
+    H.emit('playlists');
+  };
   H.addToPlaylist = async (pid, idxs) => {
     const p = H.data.playlists.find(p => p.id === pid), have = new Set(p.ids);
     const add = [...new Set(idxs.map(i => H.data.tracks[i].id))].filter(id => !have.has(id));
@@ -184,14 +216,22 @@
   async function syncPlaylists() {
     if (!H.data || document.hidden) return;
     try {
-      const fresh = await api('/api/playlists'), sig = ps => ps.map(p => `${p.id}:${p.version}`).join();
-      if (sig(fresh) !== sig(H.data.playlists)) { H.data.playlists = fresh; H.emit('playlists'); }
+      const [fresh, folders] = await Promise.all([api('/api/playlists'), api('/api/folders')]), sig = ps => ps.map(p => `${p.id}:${p.version}`).join();
+      const fsig = fs => JSON.stringify([...fs].sort((a, b) => a.id - b.id));
+      if (sig(fresh) !== sig(H.data.playlists) || fsig(folders) !== fsig(H.data.folders)) { H.data.playlists = fresh; H.data.folders = folders; H.emit('playlists'); }
     } catch (e) {}
   }
   document.addEventListener('visibilitychange', syncPlaylists);
   window.addEventListener('focus', syncPlaylists);
   setInterval(syncPlaylists, 20000);
   H.playlistTracks = p => p.ids.map(id => H.data.byId[id]).filter(i => i != null);
+  // "Gig › Warmup": where a playlist is filed, for lists that show playlists from every folder.
+  H.folderPath = fid => {
+    const out = [], seen = new Set();
+    for (let f = H.data.folders.find(x => x.id === fid); f && !seen.has(f.id); f = H.data.folders.find(x => x.id === f.parent)) { seen.add(f.id); out.unshift(f.name); }
+    return out.join(' › ');
+  };
+  H.playlistLabel = p => { const path = p.folder ? H.folderPath(p.folder) : ''; return path ? `${path} › ${p.name}` : p.name; };
   // "Add to playlist" menu, drawn in whichever document the button lives in (the host or a mode frame).
   // Flows are playlists too, but their tracks come from the route, so they aren't offered here.
   H.playlistMenu = (anchor, idxs) => {
@@ -203,7 +243,7 @@
     m.id = 'plmenu'; m.className = 'menu'; m.anchor = anchor;
     m.innerHTML = `<div class="mhead">${H.t('addToN', { n: idxs.length })}</div>` + pls.map(p => {
       const has = ids.every(id => p.ids.includes(id));
-      return `<button data-pl="${p.id}" class="${has ? 'has' : ''}"><span class="grow">${has ? '✓ ' : ''}${H.esc(p.name)}</span><span class="muted small">${p.ids.length}</span></button>`;
+      return `<button data-pl="${p.id}" class="${has ? 'has' : ''}"><span class="grow">${has ? '✓ ' : ''}${H.esc(H.playlistLabel(p))}</span><span class="muted small">${p.ids.length}</span></button>`;
     }).join('') + `<button data-pl="new" class="new">${H.t('newPlaylistDots')}</button>`;
     doc.body.appendChild(m);
     const r = anchor.getBoundingClientRect(), w = doc.defaultView;

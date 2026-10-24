@@ -23,6 +23,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
+import com.willlauer.summit.data.Folder
+import com.willlauer.summit.data.Playlist
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
@@ -33,28 +35,47 @@ fun PlaylistsScreen(bottomPad: Dp) {
     val lib = app.repo.lib.collectAsStateWithLifecycle().value ?: return
     val pls by app.repo.playlists.collectAsStateWithLifecycle()
     val active by app.repo.active.collectAsStateWithLifecycle()
-    val mine = pls.filter { it.kind == "playlist" }.sortedByDescending { it.updated ?: 0.0 }
-    val flows = pls.filter { it.kind == "flow" }
+    val folders by app.repo.folders.collectAsStateWithLifecycle()
+    val closed by app.repo.closedFolders.collectAsStateWithLifecycle()
+    // Folders first (each one's subfolders, then its playlists by name, as in the rekordbox export); then everything unfiled.
+    val known = folders.map { it.id }.toSet()
+    val home = { id: Int? -> id?.takeIf { it in known } }  // a dangling folder id counts as the top level
+    fun inside(fid: Int): Int = pls.count { home(it.folder) == fid } + folders.filter { home(it.parent) == fid }.sumOf { inside(it.id) }
+    val tree = buildList<Pair<Int, Any>> {
+        fun walk(fid: Int, d: Int) {
+            folders.filter { home(it.parent) == fid }.forEach { f -> add(d to f); if (f.id !in closed) walk(f.id, d + 1) }
+            pls.filter { home(it.folder) == fid }.sortedBy { it.name.lowercase() }.forEach { add(d to it) }
+        }
+        folders.filter { home(it.parent) == null }.forEach { f -> add(0 to f); if (f.id !in closed) walk(f.id, 1) }
+    }
+    val loose = pls.filter { home(it.folder) == null }
+    val mine = loose.filter { it.kind == "playlist" }.sortedByDescending { it.updated ?: 0.0 }
+    val flows = loose.filter { it.kind == "flow" }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = bottomPad + 16.dp)) {
         item {
             Header("Playlists", actions = {
+                TextButton(onClick = { app.dialog = Dialog.NewFolder() }) { Icon(PI.Folder, null); Spacer(Modifier.width(4.dp)); Text("Folder") }
                 TextButton(onClick = { app.dialog = Dialog.NewPlaylist(makeActive = true) }) { Icon(PI.Add, null); Spacer(Modifier.width(4.dp)); Text("New") }
             })
         }
-        if (mine.isEmpty()) item { Empty("Start one with New, or ＋ on any song", PI.Queue) }
-        items(mine, key = { "p${it.id}" }) { p ->
-            val dur = remember(p.ids) { app.repo.idxs(p).sumOf { lib.tracks[it].dur } }
-            Row(Modifier.fillMaxWidth().clickable { app.playlist(p.id) }.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Mosaic(p, 60.dp)
-                Spacer(Modifier.width(14.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(p.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("${p.ids.size} songs · ${fmtLong(dur)}", style = MaterialTheme.typography.bodySmall)
+        if (mine.isEmpty() && tree.isEmpty()) item { Empty("Start one with New, or ＋ on any song", PI.Queue) }
+        items(tree, key = { (_, x) -> if (x is Folder) "d${x.id}" else "p${(x as Playlist).id}" }) { (d, x) ->
+            if (x is Folder) {
+                val open = x.id !in closed
+                Row(Modifier.fillMaxWidth().clickable { app.repo.toggleFolder(x.id) }.padding(start = 16.dp + 20.dp * d, end = 4.dp, top = 2.dp, bottom = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Icon(if (open) PI.Down else PI.Right, if (open) "Close" else "Open", Modifier.size(20.dp), tint = C.Muted)
+                    Spacer(Modifier.width(6.dp))
+                    Icon(PI.Folder, null, tint = C.Cyan)
+                    Spacer(Modifier.width(12.dp))
+                    Text(x.name, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("${inside(x.id)}", style = MaterialTheme.typography.bodySmall, color = C.Muted)
+                    IconButton(onClick = { app.sheet = Sheet.FolderActions(x.id) }) { Icon(PI.More, "Folder actions", tint = C.Muted) }
                 }
-                if (p.id == active) Text("Building", Modifier.clip(Pill).background(C.Green.copy(alpha = .12f)).padding(horizontal = 10.dp, vertical = 4.dp),
-                    style = MaterialTheme.typography.labelSmall, color = C.Green)
-            }
+            } else PlaylistRow(x as Playlist, active, indent = 20.dp * d)
         }
+        if (tree.isNotEmpty() && mine.isNotEmpty()) item { SectionTitle("Not in a folder") }
+        items(mine, key = { "p${it.id}" }) { p -> PlaylistRow(p, active) }
         if (flows.isNotEmpty()) {
             item { SectionTitle("Flows from the desktop") }
             items(flows, key = { "f${it.id}" }) { p ->
@@ -64,6 +85,23 @@ fun PlaylistsScreen(bottomPad: Dp) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun PlaylistRow(p: Playlist, active: Int?, indent: Dp = 0.dp) {
+    val app = LocalApp.current
+    val lib = app.repo.lib.collectAsStateWithLifecycle().value ?: return
+    val dur = remember(p.ids) { app.repo.idxs(p).sumOf { lib.tracks[it].dur } }
+    Row(Modifier.fillMaxWidth().clickable { app.playlist(p.id) }.padding(start = 16.dp + indent, end = 16.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Mosaic(p, if (indent > 0.dp) 48.dp else 60.dp)
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(p.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${p.ids.size} songs · ${fmtLong(dur)}" + if (p.kind == "flow") " · flow" else "", style = MaterialTheme.typography.bodySmall)
+        }
+        if (p.id == active) Text("Building", Modifier.clip(Pill).background(C.Green.copy(alpha = .12f)).padding(horizontal = 10.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.labelSmall, color = C.Green)
     }
 }
 
@@ -111,6 +149,7 @@ fun PlaylistScreen(id: Int, bottomPad: Dp) {
                         IconButton(onClick = { menu = true }) { Icon(PI.More, "More") }
                         DropdownMenu(menu, { menu = false }, containerColor = C.Raised2) {
                             if (editable) DropdownMenuItem({ Text("Rename") }, { menu = false; app.dialog = Dialog.Rename(p.id) }, leadingIcon = { Icon(PI.Edit, null) })
+                            DropdownMenuItem({ Text("Move to folder…") }, { menu = false; app.sheet = Sheet.MoveTo(p.id) }, leadingIcon = { Icon(PI.Folder, null) })
                             DropdownMenuItem({ Text("Show route on map") }, { menu = false; app.showOnMap(MapFocus(order, p.name, path = true)) }, leadingIcon = { Icon(PI.Route, null) })
                             DropdownMenuItem({ Text("Delete", color = C.Magenta) }, { menu = false; app.dialog = Dialog.Delete(p.id) }, leadingIcon = { Icon(PI.Delete, null, tint = C.Magenta) })
                         }
@@ -174,10 +213,21 @@ fun SimilarScreen(chain: List<Int>, bottomPad: Dp) {
     val lib = repo.lib.collectAsStateWithLifecycle().value ?: return
     val seed = chain.last()
     var list by remember { mutableStateOf<List<Int>?>(null) }
-    LaunchedEffect(chain) { val skip = chain.toSet(); list = repo.neighbors(seed, 30).filter { it !in skip }.take(25) }
+    val n by repo.similarResults.collectAsStateWithLifecycle()
+    var opts by remember { mutableStateOf(false) }
+    LaunchedEffect(chain, n) { list = null; val skip = chain.toSet(); list = repo.neighbors(seed, n + skip.size).filter { it !in skip }.take(n) }
     val t = lib.tracks[seed]
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = bottomPad + 16.dp)) {
-        item { Header("Similar to ${t.name}", t.by, back = true, actions = { ActiveChip(Modifier.padding(end = 8.dp)) }) }
+        item { Header("Similar to ${t.name}", t.by, back = true, actions = {
+            ActiveChip()
+            Box {
+                IconButton(onClick = { opts = true }) { Icon(PI.Gear, "How many", tint = C.Muted) }
+                DropdownMenu(opts, { opts = false }, containerColor = C.Raised2) {
+                    Text("Similar songs to show", Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.labelMedium, color = C.Muted)
+                    listOf(10, 25, 50, 100, 250).forEach { k -> DropdownMenuItem({ Text("$k" + if (k == n) "  ✓" else "") }, { opts = false; repo.setSimilarResults(k) }) }
+                }
+            }
+        }) }
         if (chain.size > 1) item {  // the trail you followed; tap to go back to any step
             Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 chain.forEachIndexed { k, i ->

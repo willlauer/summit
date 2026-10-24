@@ -32,7 +32,12 @@ data class Group(val id: Int, val label: String? = null, val family: Int? = null
 data class SpaceInfo(val key: String, val label: String)
 
 @Serializable
-data class Playlist(val id: Int, val name: String, val kind: String = "playlist", val ids: List<String>, val version: Int = 0, val updated: Double? = null)
+data class Playlist(val id: Int, val name: String, val kind: String = "playlist", val ids: List<String>, val version: Int = 0, val updated: Double? = null,
+                    val folder: Int? = null)
+
+/** A folder of playlists (nestable, made on the desktop). The rekordbox export mirrors the tree. */
+@Serializable
+data class Folder(val id: Int, val name: String, val parent: Int? = null)
 
 @Serializable
 data class LibraryPayload(
@@ -43,6 +48,7 @@ data class LibraryPayload(
     val spaceList: List<SpaceInfo> = emptyList(),
     val defaultSpace: String = "combined",
     val playlists: List<Playlist> = emptyList(),
+    val folders: List<Folder> = emptyList(),
     val liked: List<String> = emptyList(),
 )
 
