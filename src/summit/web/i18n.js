@@ -181,7 +181,7 @@
     'set.bitrate': ['Garmin MP3 bitrate (converted tracks)', 'Garmin の MP3 ビットレート（変換する曲）'], 'set.plline': ['Garmin playlist line format', 'Garmin プレイリストの行形式'],
     'set.pllineSub': ['If playlists show up empty on the watch, try another format and sync again.', 'ウォッチでプレイリストが空になる場合は、別の形式にして再同期してください。'],
     'set.mtp': ['Garmin over MTP', 'Garmin の MTP 接続'], 'set.ffmpeg': ['MP3 conversion', 'MP3 変換'], 'set.saved': ['Saved', '保存しました'],
-    'set.about': ['About', '情報'], 'set.server': ['Summit server', 'Summit サーバー'], 'set.libSize': ['{n} tracks on the map · {p} playlists', 'マップ上の曲 {n} · プレイリスト {p}'],
+    'set.about': ['About', '情報'], 'set.server': ['Summit server', 'Summit サーバー'], 'set.winApp': ['Windows app', 'Windows アプリ'], 'set.libSize': ['{n} tracks on the map · {p} playlists', 'マップ上の曲 {n} · プレイリスト {p}'],
     'set.shortcut': ['Back / forward: ⌘[ and ⌘], or the mouse side buttons', '戻る / 進む: ⌘[ と ⌘]、またはマウスのサイドボタン'],
     // sync page (MusicSync, bundled)
     'sy.garmin': ['Garmin', 'Garmin'], 'sy.fiio': ['FiiO MicroSD', 'FiiO microSD'], 'sy.kind.garmin': ['Watch · the playlists you pick', 'ウォッチ · 選んだプレイリスト'],

@@ -39,6 +39,10 @@
     return r.json();
   };
   H.api = api;
+  // Opened from another machine (the Windows app, a browser over Tailscale): play the phone's streams, since only
+  // WebKit plays AIFF/ALAC, and log plays as that client.
+  H.remote = !['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
+  H.client = H.remote ? 'web' : 'desktop';
 
   H.ready = api('/api/library').then(d => {
     d.byId = {};
@@ -451,9 +455,10 @@
       this.pos = this.queue.indexOf(i);
       if (this.pos < 0) { this.queue = [i]; this.pos = 0; this.label = label || ''; }
       this.current = i;
-      audio.src = `/audio/${H.data.tracks[i].id}`;
+      audio.src = `/${H.remote ? 'stream' : 'audio'}/${H.data.tracks[i].id}`;
       if (at) audio.addEventListener('loadedmetadata', () => (audio.currentTime = at), { once: true });
       audio.play().catch(() => {});
+      if (H.remote) api('/api/prefetch', 'POST', { ids: this.queue.slice(this.pos + 1, this.pos + 4).map(j => H.data.tracks[j].id) }).catch(() => {});  // transcode ahead, like the phone
       renderPlayer(); H.emit('player', i);
     },
     audition(i) { if (this.current !== i) this.play(i, { queue: [i], label: H.t('audition'), at: H.data.tracks[i].audition }); },
@@ -484,7 +489,7 @@
     heard.secs += d;
     if (heard.secs >= Math.min(30, (audio.duration || 60) / 2)) {
       heard.sent = true;
-      api('/api/plays', 'POST', { id: H.data.tracks[heard.i].id, client: 'desktop', secs: heard.secs }).catch(() => {});
+      api('/api/plays', 'POST', { id: H.data.tracks[heard.i].id, client: H.client, secs: heard.secs }).catch(() => {});
     }
   });
   if ('mediaSession' in navigator) {

@@ -1,0 +1,21 @@
+# Build the Windows app (windows/) on a Windows runner; download Summit.exe from the run's artifacts.
+name: Windows app
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [windows/**, src/summit/assets/icon.png, .github/workflows/windows.yml]
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the version counts commits
+      - uses: astral-sh/setup-uv@v6
+      - run: ./windows/build.ps1
+        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Summit-windows
+          path: windows/dist/Summit.exe

@@ -1,0 +1,12 @@
+[project]
+name = "summit-windows"
+version = "0.1.0"
+description = "Summit for Windows: a window on the Summit server on your Mac"
+requires-python = ">=3.11,<3.14"  # pythonnet (pywebview's WinForms backend)
+dependencies = ["pywebview>=6.2.1"]
+
+[dependency-groups]
+build = ["pyinstaller>=6.11", "pillow>=11"]  # pillow: PyInstaller converts the PNG icon to .ico
+
+[tool.uv]
+package = false

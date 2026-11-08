@@ -108,7 +108,8 @@ $('#save').onclick = async () => {
 
 async function about() {
   const v = await H.api('/api/version').catch(() => ({ version: '?' })), rb = S.data.rekordbox || {};
-  $('#about').innerHTML = `${t_('set.server')}: <b>${S.esc(v.version)}</b><br>${t_('set.libSize', { n: S.tracks.length.toLocaleString(), p: S.data.playlists.length })}<br>
+  const win = await Promise.resolve(window.top.pywebview?.api?.app?.()).catch(() => null);  // the Windows app (windows/)
+  $('#about').innerHTML = `${win ? `${t_('set.winApp')}: <b>${S.esc(win.version)}</b><br>` : ''}${t_('set.server')}: <b>${S.esc(v.version)}</b><br>${t_('set.libSize', { n: S.tracks.length.toLocaleString(), p: S.data.playlists.length })}<br>
     rekordbox: ${rb.imported ? t_('rbStatus', { n: (rb.matched || 0).toLocaleString(), a: new Date(rb.exported * 1000).toLocaleDateString() }) : S.esc(t_('rbNone', { p: rb.path || '' }))}<br>
     <span class="muted">${t_('set.shortcut')}</span>`;
 }

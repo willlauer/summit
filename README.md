@@ -96,15 +96,17 @@ flowchart TB
     end
 
     phone["📱 <b>Android app</b><br/>map · search · player"]
+    pc["🖥️ <b>Windows app</b><br/>the desktop UI"]
     rb["🎛️ <b>rekordbox</b>"]
 
     server <-- "Tailscale (HTTPS)<br/>library · audio · playlists" --> phone
+    server <-- "Tailscale (HTTPS)" --> pc
     xml -- "Import Playlist" --> rb
 
     classDef app fill:#10233a,stroke:#5fd3f3,stroke-width:2px,color:#e6f6ff
     classDef store fill:#1c1236,stroke:#b48cff,stroke-width:2px,color:#f1eaff
     classDef ext fill:#13261c,stroke:#5ff3a6,stroke-width:2px,color:#e6fff1
-    class server,desktop,phone app
+    class server,desktop,phone,pc app
     class db,xml store
     class rb ext
     style mac fill:#0a1522,stroke:#2f5677,stroke-width:1px,stroke-dasharray:5 4,color:#cfe6f5
@@ -209,6 +211,22 @@ connections, and caches recently played songs. Settings shows the app and server
 > **Tip:** keep the Mac awake on the charger (System Settings → Battery → Options → *Prevent automatic sleeping on
 > power adapter when the display is off*). The screen can still turn off.
 
+## Windows
+
+The app in `windows/` is the desktop app in a native window (WebView2) on a Windows PC, streaming from your Mac
+over Tailscale the same way the phone does. The Mac does all the work: the PC only needs Tailscale.
+
+1. Set up the Mac's server and `tailscale serve` as for the phone (steps 1 and 2 above).
+2. **Get `Summit.exe`:** download it from the latest *Windows app* run in the repo's GitHub Actions (it builds on every
+   push that touches `windows/`), or build it on the PC with `powershell -File windows\build.ps1` (needs
+   [uv](https://docs.astral.sh/uv/) and git).
+3. Run it and enter the same `https://<your-mac>.<tailnet>.ts.net` address as the phone. **Summit → Change server…**
+   in the menu changes it later.
+
+The window is the desktop app's own pages, so everything (Map, Tag, Flow, Tree, Library, Playlists, Settings) works,
+except device sync, which stays on the Mac the devices plug into. Lossless tracks play as the phone's AAC streams,
+since WebView2 can't play AIFF or ALAC. Any browser on your tailnet gets the same UI at that address.
+
 ## rekordbox
 
 `summit export` (or Export to rekordbox on the desktop Playlists page) writes `data/exports/summit.xml`. Every track points to its **original
@@ -237,6 +255,7 @@ src/summit/      Python package: pipeline (scan, analyze, layout, label), FastAP
   sync/          Device sync (Garmin over MTP, FiiO card), from MusicSync
   web/           Desktop UI (Map, Tag, Flow, Tree, Search, Library, Playlists, Sync, Settings; three.js for 3D)
 android/         Android app (Kotlin, Jetpack Compose, Media3, OpenGL map)
+windows/         Windows app (pywebview window on the Mac's server; build.ps1, built by GitHub Actions)
 scripts/         App icon and app-bundle builders
 docs/images/     Screenshots for this README
 mockups/         Throwaway UI mockups from the design phase
