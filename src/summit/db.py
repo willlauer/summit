@@ -97,6 +97,25 @@ def migrate(con: sqlite3.Connection) -> None:
     if "folder_id" not in {r[1] for r in con.execute("PRAGMA table_info(playlists)")}:
         con.execute("ALTER TABLE playlists ADD COLUMN folder_id INTEGER")
         con.commit()
+    # rekordbox (rekordbox.py): its track info from a collection export.
+    if not con.execute("SELECT 1 FROM sqlite_master WHERE name='rb_tracks'").fetchone():
+        con.execute("CREATE TABLE rb_tracks (track_id TEXT PRIMARY KEY, attrs TEXT)")
+        con.execute("CREATE TABLE rb_meta (key TEXT PRIMARY KEY, val TEXT)")
+        con.commit()
+    # Hot cues are gone: their edits, player offsets, and rekordbox's grids and marks.
+    if con.execute("SELECT 1 FROM sqlite_master WHERE name IN ('cue_edits', 'rb_offsets')").fetchone():
+        con.execute("DROP TABLE IF EXISTS cue_edits")
+        con.execute("DROP TABLE IF EXISTS rb_offsets")
+        con.commit()
+    for col in ("tempo", "marks"):
+        if col in {r[1] for r in con.execute("PRAGMA table_info(rb_tracks)")}:
+            con.execute(f"ALTER TABLE rb_tracks DROP COLUMN {col}")
+            con.commit()
+    # Listening history (one row per real listen: 30 s, or half a short track), for Discover.
+    if not con.execute("SELECT 1 FROM sqlite_master WHERE name='plays'").fetchone():
+        con.execute("CREATE TABLE plays (track_id TEXT, at REAL, client TEXT, secs REAL)")
+        con.execute("CREATE INDEX plays_at ON plays (at)")
+        con.commit()
     for table in ("layouts", "clusters"):
         cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
         if "family" not in cols:
@@ -120,7 +139,7 @@ def seed_tags(con: sqlite3.Connection) -> None:
 def purge(con: sqlite3.Connection, ids: list[str]) -> None:
     """Remove tracks and everything derived from them."""
     for table, col in (("vectors", "track_id"), ("clap_windows", "track_id"), ("layouts", "track_id"), ("layouts3d", "track_id"),
-                       ("track_tags", "track_id"), ("playlist_tracks", "track_id"), ("likes", "track_id"), ("failures", "track_id"),
+                       ("track_tags", "track_id"), ("playlist_tracks", "track_id"), ("likes", "track_id"), ("failures", "track_id"), ("rb_tracks", "track_id"), ("plays", "track_id"),
                        ("tracks", "id")):
         con.executemany(f"DELETE FROM {table} WHERE {col}=?", [(i,) for i in ids])
 

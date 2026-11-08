@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Summit Discover</title>
+<link rel="stylesheet" href="/web/shared.css">
+<script src="/web/map.js"></script>
+<style>
+  /* layout only: components come from shared.css */
+  .basis { color: var(--muted); font-size: 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 1100px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+  .frame { padding: 14px 16px; }
+  .frame .sub { color: var(--muted); font-size: 12px; margin: -4px 0 10px; }
+  .frame .actions { margin: 0 0 8px; }
+  .row .where { color: var(--faint); font-size: 11px; white-space: nowrap; max-width: 34%; overflow: hidden; text-overflow: ellipsis; }
+  .row .addpl { visibility: hidden; }
+  .row:hover .addpl { visibility: visible; }
+  #fresh.spin::before { content: "◌ "; display: inline-block; animation: blink 1s steps(1) infinite; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="pagehead">
+    <h1 data-i18n="nav.discover">Discover</h1>
+    <span class="basis" id="basis"></span>
+    <button class="primary" id="fresh" data-i18n="disc.fresh">↻ New picks</button>
+  </div>
+  <div class="pagebody" id="body"></div>
+</div>
+
+<script>
+const H = S.H, t_ = H.t, body = document.getElementById('body');
+// far: furthest from what you've been playing; near: in the same regions, never played. Each a shuffled sampling.
+const st = { far: [], near: [], basis: null, busy: false, loaded: false, space: null };
+const LISTS = { far: 'disc.far', near: 'disc.near' };
+
+S.ready.then(() => {
+  H.registerView('discover', { save: () => ({}), load() {} });
+  if (H.mode === 'discover') load();
+});
+H.on('mode', m => { if (m === 'discover' && (!st.loaded || st.space !== H.space)) load(); });
+H.on('space', () => { if (H.mode === 'discover') load(); else st.loaded = false; });
+
+async function load(fresh) {
+  if (st.busy) return;
+  st.busy = true; document.getElementById('fresh').classList.add('spin');
+  if (!st.loaded) render();
+  try {
+    const r = await H.api('/api/discover', 'POST', { space: H.space, n: 20, exclude: fresh ? [...st.far, ...st.near] : [] });
+    Object.assign(st, { far: r.far, near: r.near, basis: r.basis, loaded: true, space: H.space });
+  } catch (err) { S.toast(err.message); }
+  st.busy = false; document.getElementById('fresh').classList.remove('spin');
+  render();
+}
+
+// "Based on 42 plays in the last 30 days, mostly House › Deep House, Techno": the regions the near list stays in.
+function basisText() {
+  const b = st.basis; if (!b) return '';
+  const w = {};
+  b.tracks.forEach((j, k) => { const c = S.tracks[j].cluster; w[c] = (w[c] || 0) + 1 / (1 + k / 20); });
+  const top = Object.entries(w).sort((a, b2) => b2[1] - a[1]).slice(0, 3).map(([c]) => H.clusterName(+c)).join(', ');
+  return (b.kind === 'plays' ? t_('disc.basisPlays', { n: b.plays, d: b.days }) : t_('disc.basisLiked', { n: b.tracks.length })) + (top ? t_('disc.mostly', { x: S.esc(top) }) : '');
+}
+
+function render() {
+  document.getElementById('basis').innerHTML = basisText();
+  if (!st.loaded) { body.innerHTML = `<div class="progress indet" style="max-width:320px;margin:60px auto"><b></b></div>`; return; }
+  if (!st.basis) { body.innerHTML = `<div class="empty" style="max-width:520px;margin:40px auto">${t_('disc.none')}</div>`; return; }
+  body.innerHTML = `<div class="cols">${['far', 'near'].map(k => `
+    <section class="frame"><div class="panel-head"><h2>${t_(LISTS[k])}</h2><span class="muted small">${st[k].length}</span></div>
+      <div class="sub">${t_(LISTS[k] + 'Sub')}</div>
+      <div class="actions"><button class="small primary" data-act="play" data-list="${k}" ${st[k].length ? '' : 'disabled'}>${t_('play')}</button>
+        <button class="small" data-act="save" data-list="${k}" ${st[k].length ? '' : 'disabled'}>${t_('savePlaylist')}</button></div>
+      ${st[k].map(j => row(j, k)).join('') || `<div class="muted small" style="padding:6px 8px">${t_('noMatches')}</div>`}
+    </section>`).join('')}</div>
+    <p class="hint" style="margin-top:14px">${t_('disc.hint')}</p>`;
+}
+function row(j, list) {
+  const t = S.tracks[j];
+  return `<div class="row${H.player.current === j ? ' playing' : ''}" data-i="${j}" data-list="${list}" title="${t_('rowTip')}"><span class="dot" style="--c:${S.col(t.cluster)}"></span>
+    <span class="grow">${S.esc(t.title)} <span class="muted">· ${S.esc(t.artist)}</span></span><span class="where">${S.esc(H.clusterName(t.cluster))}</span>
+    <span class="muted small">${t.bpm ?? ''}</span>${S.heart(j)}<button class="addpl" data-act="addpl" data-i="${j}" title="${t_('addToPl')}">＋</button></div>`;
+}
+
+document.getElementById('fresh').onclick = () => load(true);
+body.addEventListener('click', async e => {
+  const el = e.target.closest('[data-act]');
+  if (el) {
+    const k = el.dataset.list, label = t_(LISTS[k] || 'nav.discover');
+    if (el.dataset.act === 'play') H.playList(st[k], label);
+    if (el.dataset.act === 'addpl') H.playlistMenu(el, [+el.dataset.i]);
+    if (el.dataset.act === 'save') { const n = prompt(t_('playlistName'), label); if (n) try { await H.createPlaylist(n, st[k]); S.toast(t_('saved', { x: n })); } catch (err) { S.toast(err.message); } }
+    return;
+  }
+  const r = e.target.closest('.row[data-i]'); if (!r || e.target.closest('button') || e.detail > 1) return;
+  H.player.play(+r.dataset.i, { queue: st[r.dataset.list], label: t_(LISTS[r.dataset.list]) });
+});
+body.addEventListener('dblclick', e => { const r = e.target.closest('.row[data-i]'); if (r && !e.target.closest('button')) H.dblGoTo(e, +r.dataset.i); });
+H.on('player', i => body.querySelectorAll('.row[data-i]').forEach(r => r.classList.toggle('playing', +r.dataset.i === i)));
+H.on('lang', render);
+H.on('clusters', render);
+</script>
+</body>
+</html>

@@ -30,6 +30,8 @@ playlists go straight to rekordbox.
   few. "Teach a vibe" turns any selection into a new tag.
 - **On your phone.** The full library, map, search, playlists and player on Android, streamed from your Mac over
   Tailscale. Playlists sync both ways.
+- **To your watch and MP3 player.** Send playlists to a Garmin watch and mirror your library onto a FiiO MicroSD card
+  from the desktop app (MusicSync, built in).
 - **Two looks.** Classic (glowing neon) and Pixel (retro 8-bit), on desktop and phone.
 
 ## The phone app
@@ -87,7 +89,7 @@ flowchart TB
         direction LR
         db[("Library<br/><i>SQLite</i>")]
         server["<b>Summit server</b><br/>FastAPI · :8766"]
-        desktop["<b>Desktop app</b><br/>Map · Tag · Flow · Tree"]
+        desktop["<b>Desktop app</b><br/>Map · Tag · Flow · Tree · Library · Sync"]
         xml[("summit.xml")]
         desktop <--> server <--> db
         server -- export --> xml
@@ -139,15 +141,39 @@ refresh the desktop or phone app.
 
 ## Desktop app
 
-The desktop app is a native macOS window (pywebview / WebKit, so AIFF and ALAC play natively) with four modes:
+The desktop app is a native macOS window (pywebview / WebKit, so AIFF and ALAC play natively). A sidebar holds:
 
-- **Map:** explore, build playlists, and name clusters. Toggle 3D.
-- **Tag:** tag tracks in bulk.
-- **Flow:** route a DJ set through the map, stage by stage.
-- **Tree:** grow a playlist by following "sounds like".
+- **Explore:** the four ways into the map.
+  - **Map:** explore, select, and name clusters. Toggle 3D.
+  - **Tag:** tag tracks in bulk.
+  - **Flow:** route a DJ set through the map, stage by stage.
+  - **Tree:** grow a playlist by following "sounds like".
+- **Library:**
+  - **Search:** artists, songs and "sounds like" results for a name or a vibe.
+  - **Library:** artists A–Z, every song (A–Z, recently added, or by BPM), and Liked, with Play and Shuffle.
+  - **Playlists:** folders and playlists, reorder tracks, show a playlist on the map, export to rekordbox, or send it
+    to a device.
+- **Devices → Sync:** the Garmin watch and FiiO card (see below).
+- **Settings:** the look, the interface language (English / 日本語), the help layer, and device options.
 
-The header switches map labels (Genres / Subgenres; with both on, they follow the zoom level), the look, and the
-interface language (English / 日本語).
+The search box searches the map in Map, Tag and Flow, and opens Search everywhere else. The map's controls (space,
+3D, colour, labels: Genres / Subgenres, which follow the zoom level when both are on) appear only on the modes that
+draw it. A narrow window collapses the sidebar to icons.
+
+### Sync: Garmin watch and FiiO card
+
+Sync is MusicSync, built in. It only works in the app on the Mac the devices are plugged into: the server refuses
+these requests from the phone or anything relayed through Tailscale.
+
+- **Garmin:** tick the playlists to put on the watch, from Summit (including Liked) and from rekordbox's collection
+  export if there is one. Preview, then sync. Anything that isn't MP3 is converted with ffmpeg. "Send to device…" on
+  a playlist ticks it for you.
+- **FiiO card (the MP3 player):** an exact mirror of the rekordbox collection plus every song in a Summit playlist,
+  with every playlist from both as an `.m3u8` in `Documents/`.
+
+Needs `brew install libmtp ffmpeg`. Quit Garmin Express and Android File Transfer before syncing the watch, since
+they hold its connection. Settings and the watch's track index are shared with the standalone MusicSync app
+(`~/Library/Application Support/MusicSync/`), so a watch synced with either keeps working with both.
 
 <details>
 <summary>Keyboard shortcuts</summary>
@@ -185,7 +211,7 @@ connections, and caches recently played songs. Settings shows the app and server
 
 ## rekordbox
 
-`summit export` (or Export in the desktop app) writes `data/exports/summit.xml`. Every track points to its **original
+`summit export` (or Export to rekordbox on the desktop Playlists page) writes `data/exports/summit.xml`. Every track points to its **original
 file**, so lossless stays lossless.
 
 1. In rekordbox, open Preferences → Advanced → Database → **rekordbox xml** and set *Imported Library* to
@@ -208,7 +234,8 @@ click the refresh icon next to "rekordbox xml" in the sidebar.
 
 ```
 src/summit/      Python package: pipeline (scan, analyze, layout, label), FastAPI server, desktop app
-  web/           Desktop UI (Map, Tag, Flow, Tree; three.js for 3D)
+  sync/          Device sync (Garmin over MTP, FiiO card), from MusicSync
+  web/           Desktop UI (Map, Tag, Flow, Tree, Search, Library, Playlists, Sync, Settings; three.js for 3D)
 android/         Android app (Kotlin, Jetpack Compose, Media3, OpenGL map)
 scripts/         App icon and app-bundle builders
 docs/images/     Screenshots for this README

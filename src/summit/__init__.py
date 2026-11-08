@@ -12,6 +12,8 @@
     summit transcode            # convert lossless tracks for the phone now instead of on first play
     summit bundle               # build ~/Applications/Summit.app (launcher for this checkout)
     summit export               # rekordbox XML + m3u8 for all playlists
+    summit rekordbox import [PATH]   # read rekordbox's collection export (its track info)
+    summit rekordbox status
     summit status
 """
 
@@ -38,6 +40,9 @@ def main() -> None:
     sv.add_argument("action", choices=["install", "uninstall", "restart"])
     sub.add_parser("transcode")
     sub.add_parser("export")
+    rb = sub.add_parser("rekordbox")
+    rb.add_argument("action", choices=["import", "status"])
+    rb.add_argument("path", nargs="?")
     sub.add_parser("status")
     args = ap.parse_args()
     if args.cmd in ("scan", "analyze", "layout", "layout3d", "label", "update"):
@@ -97,6 +102,16 @@ def main() -> None:
         from .export import export_all
 
         print(export_all(db.connect()))
+    elif args.cmd == "rekordbox":
+        from . import db, rekordbox
+        from .pipeline import notify_server
+
+        con = db.connect()
+        if args.action == "import":
+            print(rekordbox.import_collection(con, args.path))
+            notify_server()
+        else:
+            print(rekordbox.status(con))
     elif args.cmd == "status":
         from . import db
         from .scan import pending

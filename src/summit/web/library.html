@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Summit Library</title>
+<link rel="stylesheet" href="/web/shared.css">
+<script src="/web/map.js"></script>
+<style>
+  /* layout only: components come from shared.css */
+  .pagehead .filter { width: 220px; }
+  .split { display: grid; grid-template-columns: var(--artists-w, 300px) 3px minmax(0, 1fr); flex: 1; min-height: 0; }
+  .alist { overflow: auto; border-right: 1px solid var(--line); padding: 0 6px 20px; }
+  .alist .row .n { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .alist .row.on { background: rgba(62, 230, 255, .1); box-shadow: inset 2px 0 0 var(--cyan); color: #fff; }
+  .hero { display: flex; align-items: center; gap: 16px; padding: 18px 22px 14px; border-bottom: 1px solid var(--line); }
+  .hero .cover { width: 72px; height: 72px; border-radius: var(--radius); }
+  .hero h1 { font-size: 24px; }
+  .adetail { display: flex; flex-direction: column; min-height: 0; overflow: auto; }
+  td.t { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+  td.al, td.ar { max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+  .artistlink { cursor: pointer; }
+  .artistlink:hover { color: var(--cyan); text-decoration: underline; }
+  :root[data-look="pixel"] .alist .row.on { background: #16283f; box-shadow: inset 3px 0 0 var(--cyan); }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="pagehead">
+    <h1 data-i18n="nav.browse">Library</h1>
+    <div class="tabs" id="tabs">
+      <button data-v="artists"><span data-i18n="artists">Artists</span> <span class="n" id="nA"></span></button>
+      <button data-v="songs"><span data-i18n="songs">Songs</span> <span class="n" id="nS"></span></button>
+      <button data-v="liked"><span data-i18n="tab.liked">Liked</span> <span class="n" id="nL"></span></button>
+    </div>
+    <span class="grow"></span>
+    <input class="filter" id="filter" data-i18n-ph="filterPh" autocomplete="off" spellcheck="false">
+    <span class="seg" id="sort" hidden></span>
+    <button class="primary" id="play">▶ <span data-i18n="playAllShort">Play</span></button>
+    <button id="shuffle" data-i18n="shuffleBtn">Shuffle</button>
+  </div>
+  <div id="main" style="flex:1;min-height:0;display:flex;flex-direction:column"></div>
+</div>
+
+<script>
+const H = S.H, t_ = H.t, main = document.getElementById('main'), filterEl = document.getElementById('filter');
+const SORTS = ['az', 'added', 'bpm'];
+// browseTab: Artists or Songs, whichever was last open (the sidebar's "Library" returns to it; "Liked" is its own entry).
+const st = { tab: 'artists', browseTab: 'artists', artist: null, sort: 'az', filter: '', shown: 0 };
+try { Object.assign(st, JSON.parse(localStorage.getItem('summit.lib') || '{}')); } catch (e) {}
+const keep = () => { try { localStorage.setItem('summit.lib', JSON.stringify({ tab: st.tab, browseTab: st.browseTab, artist: st.artist, sort: st.sort })); } catch (e) {} };
+const B = () => H.browse();
+const words = q => q.toLowerCase().normalize('NFD').replace(/\p{Mn}+/gu, '').split(/\s+/).filter(Boolean);
+const PAGE = 250;
+
+S.ready.then(() => {
+  setTab(st.tab, true);
+  H.registerView('library', {
+    save: () => ({ tab: st.tab, artist: st.artist, sort: st.sort, filter: st.filter }),
+    load(v) { Object.assign(st, v); filterEl.value = st.filter; setTab(st.tab, true); },
+    tab(t) { setTab(t === 'artists' ? st.browseTab : t); },
+    artist(name) { const a = B().artist(name); st.filter = ''; filterEl.value = ''; st.artist = a ? a.name : name; setTab('artists'); scrollToArtist(); },
+  });
+});
+
+function setTab(t, force) {
+  if (t === st.tab && !force) return;
+  st.tab = t; if (t !== 'liked') st.browseTab = t;
+  st.shown = 0; keep();
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === t));
+  document.getElementById('sort').hidden = t !== 'songs';
+  render();
+  H.emit('libtab', t);
+}
+
+// The list the toolbar's Play / Shuffle and a row click play: what's on show.
+function list() {
+  const f = words(st.filter), T = S.tracks;
+  const match = i => { if (!f.length) return true; const h = `${T[i].title} ${T[i].artist} ${T[i].album || ''}`.toLowerCase().normalize('NFD').replace(/\p{Mn}+/gu, ''); return f.every(w => h.includes(w)); };
+  if (st.tab === 'liked') return H.likedList().filter(match);
+  if (st.tab === 'songs') return (st.sort === 'added' ? B().byAdded : st.sort === 'bpm' ? B().byBpm : B().byTitle).filter(match);
+  const a = B().artist(st.artist || '');
+  return a ? a.tracks : [];
+}
+function label() { return st.tab === 'liked' ? t_('liked') : st.tab === 'songs' ? t_('songs') : st.artist || ''; }
+
+function render() {
+  const b = B();
+  document.getElementById('nA').textContent = b.artists.length;
+  document.getElementById('nS').textContent = S.tracks.length;
+  document.getElementById('nL').textContent = S.data.liked.length;
+  document.getElementById('sort').innerHTML = SORTS.map(k => `<button data-v="${k}" class="${k === st.sort ? 'on' : ''}">${t_('sort.' + k)}</button>`).join('');
+  if (st.tab === 'artists') return renderArtists();
+  const L = list();
+  document.getElementById('play').disabled = document.getElementById('shuffle').disabled = !L.length;
+  if (!L.length) { main.innerHTML = `<div class="empty">${t_(st.tab === 'liked' && !st.filter ? 'noLiked' : 'noMatches')}</div>`; return; }
+  const dur = L.reduce((a, j) => a + (S.tracks[j].dur || 0), 0);
+  main.innerHTML = `<div class="pagebody" id="scroller" style="padding-top:6px">
+    <div class="muted small" style="padding:4px 8px 8px">${t_('nTracks', { n: L.length.toLocaleString() })} · ${S.fmtDur(dur)}
+      ${st.tab === 'liked' ? ` · <button class="bare" data-act="saveliked" style="font-size:12px;color:var(--cyan)">${t_('savePlaylist')}</button>` : ''}</div>
+    ${table(L, { album: true, added: st.tab === 'songs' && st.sort === 'added', letters: st.tab === 'songs' && st.sort === 'az' && !st.filter })}</div>`;
+  more();
+}
+
+// Artists: A–Z list beside the open artist's songs.
+function renderArtists() {
+  const f = words(st.filter), as = B().artists.filter(a => f.every(w => a.norm.includes(w)));
+  if (!st.artist || !B().artist(st.artist)) st.artist = (as[0] || {}).name || null;
+  let last = '', rows = '';
+  for (const a of as) {
+    if (a.letter !== last) { last = a.letter; rows += `<div class="letter">${a.letter}</div>`; }
+    rows += `<div class="row${a.name === st.artist ? ' on' : ''}" data-act="artist" data-name="${S.esc(a.name)}"><span class="grow">${S.esc(a.name)}</span><span class="n">${a.tracks.length}</span></div>`;
+  }
+  const a = B().artist(st.artist || ''), L = a ? a.tracks : [];
+  document.getElementById('play').disabled = document.getElementById('shuffle').disabled = !L.length;
+  const albums = a ? new Set(L.map(j => S.tracks[j].album).filter(Boolean)).size : 0, dur = L.reduce((x, j) => x + (S.tracks[j].dur || 0), 0);
+  main.innerHTML = `<div class="split"><div class="alist" id="alist">${rows || `<div class="empty">${t_('noMatches')}</div>`}</div><div class="split-x" id="splitA"></div>
+    <div class="adetail">${a ? `<div class="hero"><span class="cover" style="background-image:url(/art/${S.tracks[L[0]].id}?s=144)"></span>
+      <div><div class="kicker">${t_('artist')}</div><h1>${S.esc(a.name)}</h1><div class="muted">${t_('nTracks', { n: L.length })}${albums ? ` · ${t_('nAlbums', { n: albums })}` : ''} · ${S.fmtDur(dur)}</div></div></div>
+      <div class="pagebody" style="padding-top:6px">${table(L, { album: true, artistCol: false })}</div>` : `<div class="empty">${t_('pickArtist')}</div>`}</div></div>`;
+  S.splitter(document.getElementById('splitA'), { target: document.getElementById('alist'), cssVar: '--artists-w', min: 200, max: 520, key: 'summit.lib.artists' });
+}
+function scrollToArtist() { const r = main.querySelector('.alist .row.on'); if (r) r.scrollIntoView({ block: 'center' }); }
+
+function table(L, { album = false, added = false, letters = false, artistCol = true } = {}) {
+  st.rendered = { L, album, added, letters, artistCol };
+  return `<table><thead><tr><th style="width:34px"></th><th style="width:44px"></th><th>${t_('title')}</th>${artistCol ? `<th>${t_('artist')}</th>` : ''}${album ? `<th>${t_('album')}</th>` : ''}
+    <th>BPM</th><th>${t_('key')}</th><th>${t_('length')}</th>${added ? `<th>${t_('added')}</th>` : ''}</tr></thead><tbody id="rows">${rowsHTML(0, PAGE)}</tbody></table>`;
+}
+function rowsHTML(from, to) {
+  const { L, album, added, letters, artistCol } = st.rendered, cols = 7 + (artistCol ? 1 : 0) + (album ? 1 : 0) + (added ? 1 : 0);
+  let out = '', prev = from > 0 && letters ? B().titleLetter(L[from - 1]) : '';
+  for (let k = from; k < Math.min(to, L.length); k++) {
+    const j = L[k], t = S.tracks[j];
+    if (letters) { const c = B().titleLetter(j); if (c !== prev) { prev = c; out += `<tr class="sep"><td colspan="${cols}" class="letter" style="position:static">${c}</td></tr>`; } }
+    out += `<tr class="${H.player.current === j ? 'playing' : ''}" data-i="${j}" data-k="${k}" title="${t_('rowTip')}"><td class="idx">${k + 1}</td>
+      <td>${S.heart(j)}<button class="addpl" data-act="addpl" data-i="${j}" title="${t_('addToPl')}">＋</button></td><td class="t">${S.esc(t.title)}</td>
+      ${artistCol ? `<td class="muted ar"><span class="artistlink" data-act="toartist" data-name="${S.esc(t.artist)}">${S.esc(t.artist)}</span></td>` : ''}
+      ${album ? `<td class="muted al">${S.esc(t.album || '')}</td>` : ''}<td class="num">${t.bpm ?? ''}</td><td class="muted">${t.key ?? ''}</td>
+      <td class="muted num">${S.fmtDur(t.dur)}</td>${added ? `<td class="muted">${t.added ? new Date(t.added * 1000).toLocaleDateString() : ''}</td>` : ''}</tr>`;
+  }
+  return out;
+}
+// Long lists draw a page at a time as you scroll.
+let io = null;
+function more() {
+  if (io) io.disconnect();
+  const { L } = st.rendered; st.shown = Math.min(PAGE, L.length);
+  if (st.shown >= L.length) return;
+  const tbody = document.getElementById('rows'), sentinel = document.createElement('tr');
+  sentinel.innerHTML = '<td colspan="10" style="height:1px;padding:0;border:0"></td>'; tbody.appendChild(sentinel);
+  io = new IntersectionObserver(es => {
+    if (!es.some(e => e.isIntersecting)) return;
+    sentinel.insertAdjacentHTML('beforebegin', rowsHTML(st.shown, st.shown + PAGE));
+    st.shown = Math.min(st.shown + PAGE, L.length);
+    if (st.shown >= L.length) { io.disconnect(); sentinel.remove(); }
+  }, { root: document.getElementById('scroller'), rootMargin: '600px' });
+  io.observe(sentinel);
+}
+
+// ---- events ----
+document.getElementById('tabs').onclick = e => { const b = e.target.closest('button'); if (b && b.dataset.v !== st.tab) { H.navPush(); setTab(b.dataset.v); } };
+document.getElementById('sort').onclick = e => { const b = e.target.closest('button'); if (b) { st.sort = b.dataset.v; keep(); render(); } };
+let ft = 0;
+filterEl.addEventListener('input', () => { clearTimeout(ft); ft = setTimeout(() => { st.filter = filterEl.value; render(); }, 120); });
+filterEl.addEventListener('keydown', e => { if (e.key === 'Escape') { filterEl.value = ''; st.filter = ''; render(); filterEl.blur(); } });
+document.getElementById('play').onclick = () => H.playList(list(), label());
+document.getElementById('shuffle').onclick = () => H.playList(list(), label(), true);
+main.addEventListener('click', async e => {
+  const el = e.target.closest('[data-act]');
+  if (el) {
+    const a = el.dataset.act;
+    if (a === 'artist') { if (el.dataset.name !== st.artist) { H.navPush(); st.artist = el.dataset.name; keep(); renderArtists(); } return; }
+    if (a === 'toartist') { H.navPush(); st.artist = B().artist(el.dataset.name) ? el.dataset.name : (el.dataset.name.split(/\s*[,&]\s*/)[0]); st.filter = ''; filterEl.value = ''; setTab('artists'); scrollToArtist(); return; }
+    if (a === 'addpl') { H.playlistMenu(el, [+el.dataset.i]); return; }
+    if (a === 'saveliked') { const n = prompt(t_('playlistName'), t_('liked')); if (n) try { await H.createPlaylist(n, H.likedList()); S.toast(t_('saved', { x: n })); } catch (err) { S.toast(err.message); } return; }
+  }
+  const r = e.target.closest('tr[data-i]'); if (!r || e.target.closest('button') || e.detail > 1) return;
+  H.player.play(+r.dataset.i, { queue: list(), label: label() });
+});
+main.addEventListener('dblclick', e => { const r = e.target.closest('tr[data-i]'); if (r && !e.target.closest('button, .artistlink')) H.dblGoTo(e, +r.dataset.i); });
+H.on('player', i => main.querySelectorAll('tr[data-i]').forEach(r => r.classList.toggle('playing', +r.dataset.i === i)));
+H.on('likes', () => { document.getElementById('nL').textContent = S.data.liked.length; if (st.tab === 'liked') render(); });
+H.on('lang', render);
+</script>
+</body>
+</html>

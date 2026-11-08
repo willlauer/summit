@@ -269,6 +269,37 @@
     };
   };
 
+  // Pick a playlist to work with (Tree's ＋ before one is chosen): resolves to its id, a new one's id, or null.
+  H.choosePlaylist = (anchor, title) => new Promise(resolve => {
+    const doc = anchor.ownerDocument, w = doc.defaultView, old = doc.getElementById('plmenu');
+    if (old) old.close();
+    const pls = H.data.playlists.filter(p => p.kind === 'playlist');
+    const m = doc.createElement('div');
+    m.id = 'plmenu'; m.className = 'menu';
+    m.innerHTML = `<div class="mhead">${H.esc(title || H.t('choosePl'))}</div>` + pls.map(p =>
+      `<button data-pl="${p.id}"><span class="grow">${H.esc(H.playlistLabel(p))}</span><span class="muted small">${p.ids.length}</span></button>`).join('')
+      + `<button data-pl="new" class="new">${H.t('newPlaylistDots')}</button>`;
+    doc.body.appendChild(m);
+    const r = anchor.getBoundingClientRect();
+    m.style.left = Math.max(8, Math.min(r.left, w.innerWidth - m.offsetWidth - 8)) + 'px';
+    m.style.top = (r.bottom + 6 + m.offsetHeight < w.innerHeight ? r.bottom + 6 : Math.max(8, r.top - 6 - m.offsetHeight)) + 'px';
+    let done = false;
+    const finish = v => { if (!done) { done = true; resolve(v); } };
+    const outside = e => { if (!m.contains(e.target)) m.close(); };
+    const esc = e => { if (e.key === 'Escape') { e.stopPropagation(); m.close(); } };
+    const elsewhere = d => { if (d !== doc) m.close(); };
+    m.close = () => { m.remove(); doc.removeEventListener('mousedown', outside, true); doc.removeEventListener('keydown', esc, true); H.off('mousedown', elsewhere); finish(null); };
+    doc.addEventListener('mousedown', outside, true); doc.addEventListener('keydown', esc, true); H.on('mousedown', elsewhere);
+    m.onclick = async e => {
+      const b = e.target.closest('[data-pl]'); if (!b) return;
+      done = true; m.close();
+      if (b.dataset.pl !== 'new') { resolve(+b.dataset.pl); return; }
+      const n = w.prompt(H.t('playlistName'), H.t('newPlaylist'));
+      if (!n) { resolve(null); return; }
+      try { resolve((await H.createPlaylist(n, [])).id); } catch (err) { H.toast(err.message); resolve(null); }
+    };
+  });
+
   // ---- library updates: files not on the map yet, and the `summit update` run that adds them ----
   H.pending = () => api('/api/pending');
   H.update = { state: () => api('/api/update'), start: () => api('/api/update', 'POST'), stop: () => api('/api/update', 'DELETE') };
@@ -317,6 +348,66 @@
     nav.busy = true;
     try { H.setMode('tree'); await (await viewOf('tree')).plant(i); } finally { nav.busy = false; H.emit('nav'); }
   };
+  // Go to a page and call one of its view's methods there (open a playlist, an artist, a device…). Back returns.
+  H.open = async (mode, method, ...args) => {
+    H.navPush();
+    nav.busy = true;
+    try { H.setMode(mode); const v = await viewOf(mode); if (method) await v[method](...args); } finally { nav.busy = false; H.emit('nav'); }
+  };
+  H.openPlaylist = id => H.open('playlists', 'open', id);
+  H.openArtist = name => H.open('library', 'artist', name);
+  H.showPlaylistOnMap = id => H.open('map', 'showPlaylist', id);
+  H.sendToDevice = id => H.open('sync', 'preselect', id);
+  // Play a list from the top, or shuffled (the queue is a shuffled copy; the list itself keeps its order).
+  H.playList = (idxs, label, shuffle = false) => {
+    if (!idxs.length) return;
+    const q = idxs.slice();
+    if (shuffle) for (let k = q.length - 1; k > 0; k--) { const j = Math.floor(Math.random() * (k + 1)); [q[k], q[j]] = [q[j], q[k]]; }
+    player.play(q[0], { queue: q, label: shuffle ? `${H.t('shuffled')} · ${label}` : label });
+  };
+
+  // ---- browsing (Library and Search pages): the phone's artist list, sort orders and song search (android/…/data/Library.kt) ----
+  const norm = s => (s || '').toLowerCase().normalize('NFD').replace(/\p{Mn}+/gu, '');
+  // "A ft B", "A feat. B", "A & B", "A, B", "A x B", "A vs B" credit each artist (so the artist list is people, not credits).
+  const SPLIT = /\s+(?:ft\.?|feat\.?|featuring|vs\.?|x|with)\s+|\s*[,&]\s*|\s+and\s+(?=[A-Z])/i;
+  const sortKey = s => norm(s).replace(/^the /, '').trim();
+  const letterOf = s => { const c = sortKey(s).charAt(0).toUpperCase(); return c >= 'A' && c <= 'Z' ? c : '#'; };
+  let browse = null;
+  H.browse = () => {
+    if (browse) return browse;
+    const T = H.data.tracks, titleN = T.map(t => norm(t.title)), artistN = T.map(t => norm(t.artist)), albumN = T.map(t => norm(t.album));
+    const hay = T.map((t, i) => `${titleN[i]} ${artistN[i]} ${albumN[i]}`);
+    const m = new Map();
+    T.forEach((t, i) => (t.artist || '').split(SPLIT).map(a => a.trim()).filter(Boolean).forEach(a => {
+      const k = norm(a); if (!m.has(k)) m.set(k, { name: a, norm: k, tracks: [] }); m.get(k).tracks.push(i);
+    }));
+    const artists = [...m.values()].map(a => ({ ...a, letter: letterOf(a.name),
+      tracks: a.tracks.sort((x, y) => albumN[x].localeCompare(albumN[y]) || titleN[x].localeCompare(titleN[y])) }))
+      .sort((a, b) => (a.letter === '#') - (b.letter === '#') || sortKey(a.name).localeCompare(sortKey(b.name)));
+    const idx = T.map((_, i) => i), words = q => norm(q).split(/\s+/).filter(Boolean);
+    browse = {
+      artists,
+      artist: name => m.has(norm(name)) ? artists.find(a => a.norm === norm(name)) : null,
+      byTitle: idx.slice().sort((a, b) => titleN[a].replace(/^the /, '').localeCompare(titleN[b].replace(/^the /, ''))),
+      byAdded: idx.slice().sort((a, b) => (T[b].added || 0) - (T[a].added || 0)),
+      byBpm: idx.slice().sort((a, b) => (T[a].bpm ?? 999) - (T[b].bpm ?? 999) || titleN[a].localeCompare(titleN[b])),
+      titleLetter: i => letterOf(T[i].title),
+      // Every word must appear somewhere in title / artist / album. Title matches rank first, then artist, then album.
+      songs(q, limit = 200) {
+        const w = words(q); if (!w.length) return [];
+        const whole = w.join(' ');
+        const rank = i => titleN[i].startsWith(whole) ? 0 : titleN[i].includes(whole) ? 1 : artistN[i].startsWith(whole) ? 2
+          : w.every(x => titleN[i].includes(x)) ? 3 : artistN[i].includes(whole) ? 4 : 5;
+        return idx.filter(i => w.every(x => hay[i].includes(x))).map(i => [rank(i), i]).sort((a, b) => a[0] - b[0]).slice(0, limit).map(r => r[1]);
+      },
+      searchArtists(q, limit = 8) {
+        const w = words(q); if (!w.length) return [];
+        return artists.filter(a => w.every(x => a.norm.includes(x)))
+          .sort((a, b) => (!a.norm.startsWith(w[0])) - (!b.norm.startsWith(w[0])) || b.tracks.length - a.tracks.length).slice(0, limit);
+      },
+    };
+    return browse;
+  };
   // Double-click selects the word under the cursor; going somewhere shouldn't leave that behind.
   H.dblGoTo = (e, i) => { e.preventDefault(); e.view.getSelection().removeAllRanges(); H.goTo(i); };
   H.exportAll = () => api('/api/export', 'POST');
@@ -334,6 +425,16 @@
   H.suggested = t => {
     const s = H.data.scores;
     return H.data.tags.map(g => g.name).filter(g => s[g] && s[g][t.i] > 0.6 && !t.confirmed.includes(g) && !t.rejected.includes(g)).sort((a, b) => s[b][t.i] - s[a][t.i]);
+  };
+
+  // ---- rekordbox: its collection export, for its BPMs and track fields (rekordbox.py) ----
+  H.rekordboxImport = async path => {
+    const r = await api('/api/rekordbox/import', 'POST', { path: path || null });
+    const d = await api('/api/library');  // BPMs and rekordbox status change
+    H.data.rekordbox = d.rekordbox;
+    d.tracks.forEach(t => { const j = H.data.byId[t.id]; if (j != null) H.data.tracks[j].bpm = t.bpm; });
+    renderPlayer();
+    return r;
   };
 
   // ---- formatting ----
@@ -366,11 +467,25 @@
   audio.addEventListener('ended', () => player.next());
   audio.addEventListener('play', () => { renderPlayer(true); H.emit('playstate', true); });
   audio.addEventListener('pause', () => { renderPlayer(true); H.emit('playstate', false); });
-  audio.addEventListener('timeupdate', () => {
+  const tick = () => {
     const el = document.getElementById('player'), dur = audio.duration || 0;
     const p = el.querySelector('.prog'), tm = el.querySelector('.ptime');
     if (p) p.style.width = (dur ? (audio.currentTime / dur) * 100 : 0) + '%';
-    if (tm) tm.textContent = `${H.fmtDur(audio.currentTime)} / ${H.fmtDur(dur)}`;
+    if (tm && dur) tm.textContent = `${H.fmtDur(audio.currentTime)} / ${H.fmtDur(dur)}`;
+  };
+  audio.addEventListener('timeupdate', tick);
+  // Listening history (Discover): a play counts once 30 s have been heard (half of a shorter track); seeking doesn't add up.
+  const heard = { i: null, secs: 0, last: 0, sent: false };
+  H.on('player', i => Object.assign(heard, { i, secs: 0, last: audio.currentTime || 0, sent: false }));
+  audio.addEventListener('timeupdate', () => {
+    const t = audio.currentTime, d = t - heard.last;
+    heard.last = t;
+    if (audio.paused || heard.i == null || heard.sent || d <= 0 || d > 1.5) return;
+    heard.secs += d;
+    if (heard.secs >= Math.min(30, (audio.duration || 60) / 2)) {
+      heard.sent = true;
+      api('/api/plays', 'POST', { id: H.data.tracks[heard.i].id, client: 'desktop', secs: heard.secs }).catch(() => {});
+    }
   });
   if ('mediaSession' in navigator) {
     try {
@@ -396,11 +511,12 @@
       <span class="eq"><i></i><i></i><i></i><i></i></span>
       ${H.heart(i)}<button class="addpl" data-p="addpl" title="${H.t('addToPl')}">＋</button>
       <span class="part" style="--c:${col};background-image:url(/art/${t.id}?s=${LOOKS[H.look].pixel ? 21 : 96})"></span>
-      <div class="pmeta" title="${H.t('goToTip')}"><b>${H.esc(t.title)}</b><span>${H.esc(t.artist)}</span></div>
+      <div class="pmeta" data-track="${i}" title="${H.t('goToTip')}"><b>${H.esc(t.title)}</b><span>${H.esc(t.artist)}</span></div>
       <span class="pfacts">${t.bpm ?? '—'} <small>BPM</small> · ${t.key ?? '—'} · ${H.esc((t.ext || '').toUpperCase())}</span>
       <div class="wave" data-p="seek" title="${H.t('seek')}"><div class="prog"></div></div>
       <span class="ptime">0:00 / ${H.fmtDur(t.dur)}</span>
       <span class="pqueue">${H.esc(player.label || H.t('queue'))}<br><span class="n">${player.pos + 1} / ${player.queue.length}</span></span>`;
+    tick();  // a redraw keeps the position while paused
   }
   H.renderPlayer = renderPlayer;
   // Hearts anywhere (host or frames call this in the capture phase so row click handlers don't also fire).
@@ -417,6 +533,50 @@
     else player[b.dataset.p]();
   });
   document.addEventListener('dblclick', e => { if (e.target.closest('#player .pmeta')) H.dblGoTo(e, player.current); });
+
+  // ---- track menu: ctrl-click (or right-click) any song anywhere: similar songs, add to playlist, … ----
+  // A song is anything carrying its index in data-i (list rows, cards) or data-track, or the dot under the cursor on a
+  // map (map.js keeps it as the map element's _hover). On a map only ctrl-click counts: right-drag rotates in 3D.
+  H.trackAt = e => {
+    const el = e.target.closest && e.target.closest('[data-track], [data-i]');
+    if (el) {
+      const v = el.dataset.track ?? el.dataset.i, i = Number(v);
+      if (v !== '' && Number.isInteger(i) && H.data.tracks[i]) return i;
+    }
+    for (let n = e.target; n; n = n.parentNode) if (n._g) return e.ctrlKey ? n._hover ?? null : null;
+    return null;
+  };
+  H.trackMenu = e => {
+    if (!H.data) return;
+    const i = H.trackAt(e); if (i == null) return;
+    e.preventDefault();
+    const doc = e.target.ownerDocument, w = doc.defaultView, t = H.data.tracks[i], x = e.clientX, y = e.clientY;
+    const old = doc.getElementById('trackmenu'); if (old) old.close();
+    const m = doc.createElement('div');
+    m.id = 'trackmenu'; m.className = 'menu';
+    m.innerHTML = `<div class="mhead"><b style="color:var(--text);font-weight:600">${H.esc(t.title)}</b> · ${H.esc(t.artist)}</div>`
+      + [['similar', 'ctx.similar'], ['addpl', 'ctx.addpl'], ['play', 'ctx.play'], ['map', 'ctx.map'], ['tree', 'ctx.tree']]
+        .map(([a, k]) => `<button data-ctx="${a}"><span class="grow">${H.t(k)}</span></button>`).join('');
+    doc.body.appendChild(m);
+    m.style.left = Math.max(8, Math.min(x, w.innerWidth - m.offsetWidth - 8)) + 'px';
+    m.style.top = (y + m.offsetHeight + 8 < w.innerHeight ? y : Math.max(8, y - m.offsetHeight)) + 'px';
+    const outside = ev => { if (!m.contains(ev.target)) m.close(); };
+    const esc = ev => { if (ev.key === 'Escape') { ev.stopPropagation(); m.close(); } };
+    const elsewhere = d => { if (d !== doc) m.close(); };
+    m.close = () => { m.remove(); doc.removeEventListener('mousedown', outside, true); doc.removeEventListener('keydown', esc, true); H.off('mousedown', elsewhere); };
+    doc.addEventListener('mousedown', outside, true); doc.addEventListener('keydown', esc, true); H.on('mousedown', elsewhere);
+    m.onclick = ev => {
+      const b = ev.target.closest('[data-ctx]'); if (!b) return;
+      m.close();
+      const a = b.dataset.ctx;
+      if (a === 'similar') H.open('search', 'similar', i);
+      if (a === 'addpl') H.playlistMenu({ ownerDocument: doc, getBoundingClientRect: () => ({ left: x, right: x, top: y, bottom: y }), contains: () => false }, [i]);
+      if (a === 'play') player.play(i);
+      if (a === 'map') H.goTo(i);
+      if (a === 'tree') H.explore(i);
+    };
+  };
+  document.addEventListener('contextmenu', e => H.trackMenu(e));
 
   // ---- help layer + global keys (frames forward their keydowns here) ----
   H.applyHelp = doc => doc.body && doc.body.classList.toggle('show-help', H.help);

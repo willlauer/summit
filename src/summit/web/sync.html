@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Summit Sync</title>
+<link rel="stylesheet" href="/web/shared.css">
+<script src="/web/map.js"></script>
+<style>
+  /* layout only: components come from shared.css */
+  .libline { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+  .libline.err { color: var(--magenta); }
+  .grid { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 18px; align-items: start; }
+  .devs { display: flex; flex-direction: column; gap: 10px; }
+  .devhead { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .devhead h1 { font-size: 22px; }
+  .cols { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(0, 1.5fr); gap: 14px; align-items: start; }
+  .frame { padding: 14px 16px; }
+  .pickbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .pickbar input { flex: 1; min-width: 140px; }
+  .picker { max-height: calc(100vh - 380px); min-height: 160px; overflow: auto; margin: 0 -4px; padding: 0 4px; }
+  .picker h3 { margin: 12px 8px 4px; }
+  .synfoot { display: flex; align-items: center; gap: 12px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .synfoot .muted { flex: 1; }
+  .pllist { list-style: none; margin: 10px 0 0; padding: 0; max-height: 300px; overflow: auto; }
+  .pllist li { display: flex; justify-content: space-between; gap: 10px; padding: 5px 2px; border-top: 1px solid var(--line-soft); font-size: 12.5px; }
+  .pllist li span:last-child { color: var(--muted); white-space: nowrap; }
+  .danger-zone { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .notes { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 12.5px; }
+  .notes li { margin: 4px 0; }
+  #job { margin-top: 14px; }
+  #job .progress { margin: 10px 0 6px; }
+  .jobmsg { font-size: 12px; color: var(--muted); min-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .unavailable { max-width: 520px; margin: 60px auto; }
+  @media (max-width: 1150px) { .grid { grid-template-columns: minmax(0, 1fr); } .devs { flex-direction: row; } .devs > * { flex: 1; } .cols { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="pagehead">
+    <h1 data-i18n="mode.sync">Sync</h1>
+    <span class="libline" id="libline"></span>
+    <button class="ghost small" id="reload" data-i18n="sy.reload">Reload playlists</button>
+    <button class="ghost small" id="settings" data-i18n="nav.settings">Settings</button>
+  </div>
+  <div class="pagebody" id="body">
+    <div class="grid">
+      <div class="devs" id="devs"></div>
+      <div id="dev"></div>
+    </div>
+    <section class="frame" id="job" hidden>
+      <div class="panel-head"><h2 id="jobTitle"></h2><button class="ghost small" id="jobCancel" data-i18n="cancel">Cancel</button><button class="ghost small" id="jobClose" hidden data-i18n="dismiss">Dismiss</button></div>
+      <div class="progress" id="jobBar"><b></b></div>
+      <div class="jobmsg" id="jobMsg"></div>
+      <div id="jobResult"></div>
+      <details><summary data-i18n="sy.log">Log</summary><pre id="jobLog"></pre></details>
+    </section>
+  </div>
+</div>
+
+<dialog id="planDlg">
+  <h2 id="planTitle"></h2>
+  <div id="planBody"></div>
+  <div class="dlg-actions"><button class="ghost" id="planCancel" data-i18n="cancel">Cancel</button><button class="primary" id="planGo" data-i18n="sy.syncNow">Sync now</button></div>
+</dialog>
+<dialog id="wipeDlg">
+  <h2 data-i18n="sy.purgeQ">Delete all music?</h2>
+  <p id="wipeText"></p>
+  <p data-i18n-html="sy.typeDelete"></p>
+  <input id="wipeInput" autocomplete="off" spellcheck="false" style="width:100%">
+  <div class="dlg-actions"><button class="ghost" id="wipeCancel" data-i18n="cancel">Cancel</button><button class="danger" id="wipeGo" disabled data-i18n="sy.purge">Delete everything</button></div>
+</dialog>
+
+<script>
+const H = S.H, t_ = H.t, $ = s => document.querySelector(s);
+const st = {
+  device: null, devices: [], library: null, libError: '', config: null,
+  selected: new Set(), filter: '', source: 'all', contents: {}, job: null, lastPlanArgs: null, unavailable: false,
+};
+try { st.device = localStorage.getItem('summit.sync.device'); } catch (e) {}
+
+const ICONS = {
+  garmin: '<svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M9 2h6l.7 3.1A7 7 0 0 1 19 11v2a7 7 0 0 1-3.3 5.9L15 22H9l-.7-3.1A7 7 0 0 1 5 13v-2a7 7 0 0 1 3.3-5.9zm3 5a5 5 0 1 0 0 10 5 5 0 0 0 0-10m-.75 2h1.5v3.3l2.1 1.2-.75 1.3-2.85-1.65z"/></svg>',
+  fiio: '<svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M8 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6zm1 3v3h2V5zm3 0v3h2V5zm3 0v3h2V5z"/></svg>',
+};
+const human = n => {
+  if (n == null) return '—';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0; n = Number(n);
+  while (Math.abs(n) >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(i ? 1 : 0)} ${u[i]}`;
+};
+const num = n => (n ?? 0).toLocaleString();
+const ago = ts => { if (!ts) return '—'; const m = Math.round((Date.now() / 1000 - ts) / 60); return m < 60 ? `${m} min` : m < 2880 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} d`; };
+const devName = d => t_('sy.' + d.id);
+
+async function api(path, body) {
+  const r = await fetch('/api/sync' + path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (r.status === 403 && !body) st.unavailable = true;
+  if (!r.ok) throw new Error(data.detail || data.error || `HTTP ${r.status}`);
+  return data;
+}
+
+// ---- library: Summit's playlists plus the rekordbox export ----
+async function loadLibrary(force) {
+  try { st.library = force ? await api('/library/reload', {}) : await api('/library'); st.libError = ''; }
+  catch (e) { st.library = null; st.libError = e.message; }
+  renderLibLine();
+  renderDevice();
+}
+function renderLibLine() {
+  const el = $('#libline'), L = st.library;
+  el.classList.toggle('err', !L);
+  if (!L) { el.textContent = st.libError; el.title = st.libError; return; }
+  const nS = L.playlists.filter(p => p.source === 'summit').length, rb = L.rekordbox;
+  const rbText = rb.error ? t_('sy.rbMissing') : t_('sy.rbLine', { p: rb.path.replace(/^\/Users\/[^/]+/, '~'), a: ago(rb.mtime), n: rb.playlists });
+  el.textContent = `${t_('sy.summitLine', { n: nS })} · ${rbText} · ${t_('sy.syncable', { n: num(L.tracks) })}`;
+  el.title = rb.error || el.textContent;
+}
+
+// ---- devices ----
+async function loadDevices() {
+  try { st.devices = (await api('/devices')).devices; } catch (e) { if (st.unavailable) renderUnavailable(); return; }
+  H.emit('syncdevices', st.devices);
+  renderDevices();
+  renderDeviceHead();
+}
+const dev = () => st.devices.find(d => d.id === st.device) || null;
+function storageHTML(free, cap) {
+  if (!cap) return '';
+  return `<div class="storage"><div class="progress"><b style="width:${((cap - free) / cap * 100).toFixed(1)}%"></b></div><span>${t_('sy.free', { f: human(free), c: human(cap) })}</span></div>`;
+}
+function renderDevices() {
+  $('#devs').innerHTML = st.devices.map(d => `
+    <div class="frame device${d.id === st.device ? ' on' : ''}" data-dev="${d.id}" tabindex="0">
+      <div class="top"><span class="ico">${ICONS[d.id] || ''}</span>
+        <div><h2>${devName(d)}</h2><span class="state"><span class="led${d.busy ? ' busy' : d.connected ? ' on' : ''}"></span>${t_(d.busy ? 'sy.busy' : d.connected ? 'sy.online' : 'sy.offline')}</span></div></div>
+      <div class="detail">${t_('sy.kind.' + d.id)}<br>${S.esc(d.connected && d.mode === 'mtp' && d.name ? d.name : d.detail || '')}</div>
+      ${d.warning ? `<div class="warn small">${S.esc(d.warning)}</div>` : ''}
+      ${storageHTML(d.free, d.capacity)}
+    </div>`).join('');
+}
+function openDevice(id) {
+  st.device = id;
+  try { localStorage.setItem('summit.sync.device', id); } catch (e) {}
+  renderDevices(); renderDevice();
+  const d = dev(); if (d && d.connected) readContents();
+}
+
+function renderDevice() {
+  const d = dev(), box = $('#dev');
+  if (!d) { box.innerHTML = `<div class="empty">${t_('sy.pickDevice')}</div>`; return; }
+  box.innerHTML = `
+    <div class="devhead"><div style="flex:1;min-width:0"><h1>${devName(d)}</h1><div class="muted" id="devSub"></div></div><span id="devActs"></span></div>
+    <div class="cols">
+      <section class="frame"><div class="panel-head"><h2>${t_('sy.onDevice')}</h2><button class="ghost small" id="refresh">${t_('sy.refresh')}</button></div>
+        <div id="contents"></div>
+        <div class="danger-zone"><button class="danger small" id="wipe">${t_('sy.purgeDots')}</button></div></section>
+      <section class="frame"><div class="panel-head"><h2 id="syncTitle"></h2></div><div id="syncBody"></div>
+        <div class="synfoot"><span class="muted small" id="syncSummary"></span><button class="primary" id="preview">${t_('sy.preview')}</button></div></section>
+    </div>`;
+  $('#refresh').onclick = readContents;
+  $('#wipe').onclick = openWipe;
+  $('#preview').onclick = preview;
+  renderDeviceHead(); renderContents(); renderSync();
+}
+function renderDeviceHead() {
+  const d = dev(); if (!d || !$('#devSub')) return;
+  $('#devSub').innerHTML = `<span class="led${d.connected ? ' on' : ''}" style="margin-right:6px"></span>${S.esc(d.connected ? (d.detail || t_('sy.online')) : d.detail || t_('sy.offline'))}`;
+  $('#devActs').innerHTML = d.id === 'fiio' && d.connected ? `<button class="ghost" id="eject">${t_('sy.eject')}</button>` : '';
+  if ($('#eject')) $('#eject').onclick = async () => { try { await api('/eject/fiio', {}); S.toast(t_('sy.ejected')); loadDevices(); } catch (e) { S.toast(e.message); } };
+  const busy = st.job && st.job.status === 'running';
+  $('#wipe').disabled = !d.connected || busy;
+  $('#refresh').disabled = !d.connected || busy;
+  $('#preview').disabled = !d.connected || busy || !st.library || (d.id === 'garmin' && !st.selected.size);
+}
+
+async function readContents() {
+  try {
+    const c = await api(`/contents/${st.device}`);
+    if (c.contents) { st.contents[st.device] = c.contents; renderContents(); renderSync(); }
+    await startJob(`/contents/${st.device}`, {});
+  } catch (e) { if (!/Busy/.test(e.message)) S.toast(e.message); }
+}
+function renderContents() {
+  const box = $('#contents'), d = dev(); if (!box) return;
+  const c = st.contents[st.device];
+  if (!d.connected) { box.innerHTML = `<p class="muted">${t_('sy.connectToSee')}</p>`; return; }
+  if (!c) { box.innerHTML = `<p class="muted">${t_('sy.reading')}</p><div class="progress indet"><b></b></div>`; return; }
+  const pls = c.playlists || [];
+  box.innerHTML = `${c.model ? `<p class="muted" style="margin-top:0">${S.esc(c.model)}</p>` : ''}
+    <div class="stats"><div class="stat"><b>${num(c.tracks)}</b><span>${t_('tracks')} · ${human(c.track_bytes)}</span></div><div class="stat"><b>${pls.length}</b><span>${t_('tab.playlists')}</span></div></div>
+    <div style="margin-top:12px">${storageHTML(c.free, c.capacity)}</div>
+    ${c.unmanaged ? `<p class="hint">${t_('sy.unmanaged', { n: num(c.unmanaged) })}</p>` : ''}
+    <ul class="pllist">${pls.map(p => `<li><span>${S.esc(p.name)}</span><span>${p.tracks == null ? '' : t_('nTracks', { n: p.tracks })}</span></li>`).join('') || `<li class="muted">${t_('sy.noPlaylists')}</li>`}</ul>`;
+}
+
+// ---- what to sync ----
+function renderSync() {
+  const box = $('#syncBody'), L = st.library; if (!box) return;
+  if (!L) { $('#syncTitle').textContent = t_('mode.sync'); box.innerHTML = `<p class="errmsg">${S.esc(st.libError || t_('sy.loading'))}</p>`; return renderDeviceHead(); }
+  if (st.device === 'fiio') {
+    $('#syncTitle').textContent = t_('sy.mirrorTitle');
+    const skipped = [];
+    if (L.streaming) skipped.push(t_('sy.skStreaming', { n: num(L.streaming) }));
+    if (L.missing) skipped.push(t_('sy.skMissing', { n: num(L.missing) }));
+    if (L.outside) skipped.push(t_('sy.skOutside', { n: num(L.outside) }));
+    const nS = L.playlists.filter(p => p.source === 'summit').length;
+    box.innerHTML = `<div class="stats"><div class="stat"><b>${num(L.mirror)}</b><span>${t_('tracks')}</span></div><div class="stat"><b>${human(L.mirror_bytes)}</b><span>${t_('sy.totalSize')}</span></div>
+        <div class="stat"><b>${L.playlists.length}</b><span>${t_('sy.m3u')}</span></div></div>
+      <ul class="notes"><li>${t_('sy.mirrorNote1')}</li><li>${t_('sy.mirrorNote2', { s: nS, r: L.rekordbox.playlists })}</li>${skipped.length ? `<li>${t_('sy.skipped', { x: skipped.join(', ') })}</li>` : ''}</ul>`;
+    $('#syncSummary').textContent = '';
+    return renderDeviceHead();
+  }
+  $('#syncTitle').textContent = t_('sy.pickTitle');
+  const onWatch = new Set(((st.contents.garmin || {}).playlists || []).map(p => p.library_name).filter(Boolean));
+  const f = st.filter.toLowerCase();
+  const rows = L.playlists.filter(p => (st.source === 'all' || p.source === st.source) && (!f || p.name.toLowerCase().includes(f)));
+  const group = src => rows.filter(p => p.source === src).map(p => `
+    <label class="pick${onWatch.has(p.name) ? ' on-device' : ''}" title="${S.esc(p.name)}${onWatch.has(p.name) ? ' · ' + t_('sy.onWatch') : ''}">
+      <input type="checkbox" data-name="${S.esc(p.name)}" ${st.selected.has(p.name) ? 'checked' : ''} ${p.syncable ? '' : 'disabled'}>
+      <span class="nm">${S.esc(p.label || p.name)}</span><span class="ct">${p.syncable}${p.syncable !== p.count ? ` / ${p.count}` : ''} · ${human(p.bytes)}</span></label>`).join('');
+  const gS = group('summit'), gR = group('rekordbox');
+  box.innerHTML = `
+    <div class="pickbar">
+      <span class="seg" id="srcSeg">${['all', 'summit', 'rekordbox'].map(k => `<button data-v="${k}" class="${st.source === k ? 'on' : ''}">${t_('sy.src.' + k)}</button>`).join('')}</span>
+      <input id="plFilter" placeholder="${t_('sy.filterPh')}" value="${S.esc(st.filter)}">
+      <button class="ghost small" id="selAll">${t_(f || st.source !== 'all' ? 'sy.selShown' : 'sy.selAll')}</button>
+      <button class="ghost small" id="selNone" ${st.selected.size ? '' : 'disabled'}>${t_('sy.selNone')}</button>
+    </div>
+    <div class="picker">${gS ? `<h3>Summit</h3>${gS}` : ''}${gR ? `<h3>rekordbox</h3>${gR}` : ''}${gS || gR ? '' : `<div class="empty">${t_('noMatches')}</div>`}</div>`;
+  $('#srcSeg').onclick = e => { const b = e.target.closest('button'); if (b) { st.source = b.dataset.v; renderSync(); } };
+  const fi = $('#plFilter');
+  fi.oninput = () => { st.filter = fi.value; renderSync(); const n = $('#plFilter'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
+  $('#selAll').onclick = () => { rows.forEach(p => p.syncable && st.selected.add(p.name)); renderSync(); };
+  $('#selNone').onclick = () => { st.selected.clear(); renderSync(); };
+  box.querySelectorAll('input[type=checkbox]').forEach(cb => (cb.onchange = () => {
+    cb.checked ? st.selected.add(cb.dataset.name) : st.selected.delete(cb.dataset.name);
+    $('#selNone').disabled = !st.selected.size; selSummary();
+  }));
+  selSummary();
+}
+function selSummary() {
+  const sel = st.library.playlists.filter(p => st.selected.has(p.name));
+  const n = sel.reduce((a, p) => a + p.syncable, 0), b = sel.reduce((a, p) => a + p.bytes, 0);
+  $('#syncSummary').textContent = sel.length ? t_('sy.selSummary', { p: sel.length, n: num(n), b: human(b) }) : t_('sy.pickOne');
+  renderDeviceHead();
+}
+
+// ---- preview / sync / delete everything ----
+// Keep the library's playlist order (Summit's, then rekordbox's) whatever order they were ticked in.
+const ordered = names => { const o = new Map(st.library.playlists.map((p, i) => [p.name, i])); return names.filter(n => o.has(n)).sort((a, b) => o.get(a) - o.get(b)); };
+const planArgs = () => (st.device === 'garmin' ? { playlists: ordered([...st.selected]) } : {});
+async function preview() { st.lastPlanArgs = planArgs(); try { await startJob(`/plan/${st.device}`, st.lastPlanArgs); } catch (e) { S.toast(e.message); } }
+
+function showPlan(s) {
+  const rows = [], add = (k, v) => rows.push(`<tr><td>${k}</td><td>${v}</td></tr>`);
+  if (st.device === 'garmin') {
+    add(t_('tab.playlists'), s.playlists_selected);
+    add(t_('sy.p.tracks'), num(s.tracks_selected));
+    add(t_('sy.p.already'), num(s.unchanged));
+    add(t_('sy.p.send'), `${num(s.add)} · ~${human(s.add_bytes)}`);
+    if (s.transcode) add(t_('sy.p.transcode'), num(s.transcode));
+    add(t_('sy.p.remove'), num(s.delete));
+    if (s.replace) add(t_('sy.p.replace'), s.replace);
+    if (s.playlists_delete) add(t_('sy.p.plRemove'), s.playlists_delete);
+    if (s.unmanaged) add(t_('sy.p.unmanaged'), num(s.unmanaged));
+  } else {
+    add(t_('sy.p.unchanged'), num(s.unchanged));
+    add(t_('sy.p.copy'), `${num(s.add)} · ${human(s.add_bytes)}`);
+    add(t_('sy.p.delete'), `${num(s.delete)} · ${human(s.delete_bytes)}`);
+    if (s.rename) add(t_('sy.p.rename'), s.rename);
+    if (s.kept_orphans) add(t_('sy.p.kept'), s.kept_orphans);
+    add(t_('sy.p.plWrite'), s.playlists_write);
+    if (s.playlists_delete) add(t_('sy.p.plStale'), s.playlists_delete);
+    if (s.sidecars) add(t_('sy.p.junk'), `${s.sidecars} · ${human(s.sidecar_bytes)}`);
+  }
+  add(t_('sy.p.free'), human(s.free));
+  add(t_('sy.p.net'), (s.net >= 0 ? '+' : '−') + human(Math.abs(s.net)));
+  const sample = (title, list, more) => list && list.length
+    ? `<details><summary>${title}</summary><pre>${list.map(S.esc).join('\n')}${more > list.length ? `\n${t_('andMore', { n: num(more - list.length) })}` : ''}</pre></details>` : '';
+  $('#planTitle').textContent = t_('sy.planTitle', { d: devName(dev()) });
+  $('#planBody').innerHTML = `<table class="kv">${rows.join('')}</table>
+    ${sample(t_('sy.p.addList'), s.add_sample, s.add)}${sample(t_('sy.p.delList'), s.delete_sample, s.delete)}
+    ${s.fits ? '' : `<p class="errmsg">${t_('sy.noSpace')}</p>`}
+    ${!s.add && !s.delete && !s.rename ? `<p class="muted">${t_('sy.upToDate')}</p>` : ''}`;
+  $('#planGo').disabled = !s.fits;
+  $('#planDlg').showModal();
+}
+$('#planCancel').onclick = () => $('#planDlg').close();
+$('#planGo').onclick = async () => { $('#planDlg').close(); try { await startJob(`/sync/${st.device}`, st.lastPlanArgs || planArgs()); } catch (e) { S.toast(e.message); } };
+
+function openWipe() {
+  $('#wipeText').textContent = t_(st.device === 'garmin' ? 'sy.wipeGarmin' : 'sy.wipeFiio');
+  $('#wipeInput').value = ''; $('#wipeGo').disabled = true;
+  $('#wipeDlg').showModal(); $('#wipeInput').focus();
+}
+$('#wipeInput').oninput = () => ($('#wipeGo').disabled = $('#wipeInput').value !== 'DELETE');
+$('#wipeCancel').onclick = () => $('#wipeDlg').close();
+$('#wipeGo').onclick = async () => { $('#wipeDlg').close(); try { await startJob(`/wipe/${st.device}`, { confirm: 'DELETE' }); } catch (e) { S.toast(e.message); } };
+
+// ---- jobs (one at a time; every job touches a device) ----
+async function startJob(path, body) { const { job } = await api(path, body); st.job = job; renderJob(); pollJob(); }
+let jobTimer = 0;
+async function pollJob() {
+  clearTimeout(jobTimer);
+  let job;
+  try { ({ job } = await api('/job')); } catch (e) { if (!st.unavailable) jobTimer = setTimeout(pollJob, 1500); return; }
+  const was = st.job; st.job = job; renderJob();
+  if (job && job.status === 'running') { jobTimer = setTimeout(pollJob, 600); return; }
+  if (job && was && was.status === 'running' && was.id === job.id) onJobFinished(job);
+}
+function onJobFinished(job) {
+  renderDeviceHead();
+  if (job.status !== 'done') return;
+  if (job.kind === 'contents') { st.contents[job.device] = job.result; if (st.device === job.device) { renderContents(); renderSync(); } }
+  else if (job.kind === 'plan') { $('#job').hidden = true; if (st.device === job.device) showPlan(job.result); }
+  else { loadDevices(); if (st.device === job.device) setTimeout(readContents, 300); }
+}
+function renderJob() {
+  const j = st.job, box = $('#job');
+  if (!j) { box.hidden = true; return; }
+  if (j.kind === 'contents') {  // a routine read shows inside "On device", not as a job
+    if (j.status === 'running' && st.device === j.device && dev() && dev().connected && $('#contents'))
+      $('#contents').innerHTML = `<p class="muted">${S.esc(j.message)}</p><div class="progress indet"><b></b></div>`;
+    else if (j.status === 'error' && st.device === j.device && $('#contents')) $('#contents').innerHTML = `<p class="errmsg">${S.esc(j.error)}</p>`;
+    return;
+  }
+  box.hidden = false;
+  $('#jobTitle').textContent = j.title;
+  const running = j.status === 'running', bar = $('#jobBar');
+  bar.classList.toggle('indet', running && !j.total);
+  bar.firstElementChild.style.width = j.total ? `${(j.done / j.total * 100).toFixed(1)}%` : running ? '' : '100%';
+  $('#jobMsg').textContent = running ? `${j.message}${j.total ? ` (${num(j.done)} / ${num(j.total)})` : ''}` : '';
+  $('#jobCancel').hidden = !running; $('#jobClose').hidden = running;
+  const res = $('#jobResult');
+  if (j.status === 'error') res.innerHTML = `<p class="errmsg">${S.esc(j.error)}</p>`;
+  else if (j.status === 'cancelled') res.innerHTML = `<p class="muted">${t_('sy.cancelled')}</p>`;
+  else if (j.status === 'done' && j.result && j.kind !== 'plan') res.innerHTML = `<p class="okmsg">${resultText(j)}</p>`;
+  else res.innerHTML = '';
+  const log = $('#jobLog'), atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 10;
+  log.textContent = j.log.join('\n');
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+function resultText(j) {
+  const r = j.result, errs = r.errors ? t_('sy.r.errors', { n: r.errors }) : '';
+  if (j.kind === 'wipe') return t_('sy.r.wipe', { n: num(r.deleted), f: human(r.free) });
+  if (j.device === 'garmin') return t_('sy.r.garmin', { n: num(r.sent), b: human(r.sent_bytes), d: r.deleted, p: r.playlists, f: human(r.free) }) + errs;
+  return t_('sy.r.fiio', { n: num(r.copied), b: human(r.copied_bytes), d: r.deleted, p: r.playlists, f: human(r.free) }) + (r.renamed ? t_('sy.r.renamed', { n: r.renamed }) : '') + errs;
+}
+$('#jobCancel').onclick = () => api('/job/cancel', {}).catch(() => {});
+$('#jobClose').onclick = () => { $('#job').hidden = true; };
+
+function renderUnavailable() { $('#body').innerHTML = `<div class="empty unavailable">${t_('sy.desktopOnly')}</div>`; $('#reload').hidden = $('#settings').hidden = true; }
+
+// ---- events ----
+$('#devs').addEventListener('click', e => { const c = e.target.closest('[data-dev]'); if (c && c.dataset.dev !== st.device) openDevice(c.dataset.dev); });
+$('#devs').addEventListener('keydown', e => { const c = e.target.closest('[data-dev]'); if (c && e.key === 'Enter') openDevice(c.dataset.dev); });
+$('#reload').onclick = () => { $('#libline').textContent = t_('sy.loading'); loadLibrary(true); };
+$('#settings').onclick = () => H.open('settings', 'focus', 'devices');
+// Summit playlists change: refresh what's offered (quietly, a moment later).
+let plTimer = 0;
+H.on('playlists', () => { clearTimeout(plTimer); plTimer = setTimeout(() => { if (H.mode === 'sync') loadLibrary(false); else st.stale = true; }, 800); });
+H.on('mode', m => { if (m === 'sync') { loadDevices(); if (st.stale) { st.stale = false; loadLibrary(false); } } });
+H.on('syncconfig', () => { loadConfig().then(() => { loadLibrary(true); loadDevices(); }); });
+H.on('lang', () => { renderLibLine(); renderDevices(); renderDevice(); renderJob(); });
+
+async function loadConfig() { st.config = await api('/config'); st.selected = new Set(st.config.garmin_playlists || []); }
+
+(async function boot() {
+  await loadConfig().catch(() => {});
+  if (st.unavailable) { renderUnavailable(); H.registerView('sync', { save: () => ({}), load() {}, preselect() {} }); return; }
+  await loadDevices();
+  if (!st.device || !dev()) st.device = (st.devices.find(d => d.connected) || st.devices[0] || {}).id || null;
+  openDevice(st.device);
+  loadLibrary(false);
+  pollJob();
+  H.registerView('sync', {
+    save: () => ({ device: st.device }),
+    load(v) { if (v.device && v.device !== st.device) openDevice(v.device); },
+    // "Send to device" on a Summit playlist: tick it for the watch (the card gets every playlist anyway).
+    async preselect(pid) {
+      if (!st.library) await loadLibrary(false);
+      const p = st.library && st.library.playlists.find(x => x.source === 'summit' && x.id === pid);
+      if (!p) { S.toast(t_('sy.notSyncable')); return; }
+      st.selected.add(p.name); st.source = 'summit'; st.filter = '';
+      if (st.device !== 'garmin') openDevice('garmin'); else renderSync();
+      S.toast(t_('sy.preselected', { x: p.label }));
+    },
+  });
+  // Hot-plug: re-check the devices every few seconds while this page is on screen.
+  setInterval(() => {
+    if (H.mode !== 'sync' || document.hidden) return;
+    const before = st.devices.map(d => `${d.id}:${d.connected}`).join();
+    loadDevices().then(() => {
+      if (before !== st.devices.map(d => `${d.id}:${d.connected}`).join()) { renderContents(); if (dev() && dev().connected) readContents(); }
+    });
+  }, 3000);
+})();
+</script>
+</body>
+</html>

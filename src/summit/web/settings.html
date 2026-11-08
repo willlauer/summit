@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Summit Settings</title>
+<link rel="stylesheet" href="/web/shared.css">
+<script src="/web/map.js"></script>
+<style>
+  /* layout only: components come from shared.css */
+  .wrap { max-width: 720px; }
+  .frame { padding: 16px 18px; margin-bottom: 16px; }
+  .opt { display: flex; align-items: center; gap: 16px; padding: 10px 0; border-top: 1px solid var(--line-soft); }
+  .opt:first-of-type { border-top: 0; }
+  .opt .what { flex: 1; min-width: 0; }
+  .opt .what b { display: block; font-weight: 500; color: var(--text); }
+  .opt .what span { color: var(--muted); font-size: 12px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+  .deps { font-size: 12px; color: var(--muted); line-height: 1.8; }
+  .deps b { font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="pagehead"><h1 data-i18n="nav.settings">Settings</h1></div>
+  <div class="pagebody"><div class="wrap">
+    <section class="frame" id="sec-look">
+      <div class="panel-head"><h2 data-i18n="set.appearance">Appearance</h2></div>
+      <div class="opt"><div class="what"><b data-i18n="set.look">Look</b><span data-i18n="set.lookSub">Also on the phone: Library › ⚙</span></div><span class="seg" id="look"></span></div>
+      <div class="opt"><div class="what"><b data-i18n="set.lang">Language</b><span data-i18n="set.langSub">Interface text; library data stays as it is</span></div>
+        <span class="seg" id="lang"><button data-v="en">EN</button><button data-v="ja">日本語</button></span></div>
+      <div class="opt"><div class="what"><b data-i18n="set.help">Help layer</b><span data-i18n-html="set.helpSub"></span></div>
+        <span class="seg" id="help"><button data-v="0" data-i18n="set.off">Off</button><button data-v="1" data-i18n="set.on">On</button></span></div>
+    </section>
+
+    <section class="frame synconly" id="sec-devices">
+      <div class="panel-head"><h2 data-i18n="set.devices">Devices</h2><span class="muted small" data-i18n="set.devicesSub">Garmin watch and FiiO MicroSD card (Sync)</span></div>
+      <label class="field"><span data-i18n="set.xml">rekordbox collection export (XML)</span>
+        <input id="sXml" data-i18n-ph="set.xmlPh"><small id="sXmlResolved"></small></label>
+      <label class="field"><span data-i18n="set.libroot">Music library folder</span><input id="sLib"></label>
+      <div class="two">
+        <label class="field"><span data-i18n="set.fiio">FiiO card volume</span><select id="sFiioPick"></select><input id="sFiio"></label>
+        <label class="field"><span data-i18n="set.android">Playlist path prefix (what the player sees)</span><input id="sAndroid"></label>
+      </div>
+      <div class="two">
+        <label class="field"><span data-i18n="set.bitrate">Garmin MP3 bitrate (converted tracks)</span>
+          <select id="sBitrate"><option>320k</option><option>256k</option><option>192k</option><option>128k</option></select></label>
+        <label class="field"><span data-i18n="set.plline">Garmin playlist line format</span>
+          <select id="sPlline">
+            <option value="garmin">0:/MUSIC/A0001.MP3 (Garmin Express)</option>
+            <option value="Music\{file}">Music\A0001.mp3</option>
+            <option value="Music/{file}">Music/A0001.mp3</option>
+            <option value="{file}">A0001.mp3</option>
+          </select><small data-i18n="set.pllineSub">If playlists show up empty on the watch, try another format and sync again.</small></label>
+      </div>
+      <div class="deps" id="deps"></div>
+      <div class="actions"><button class="primary" id="save" data-i18n="save">Save</button><span class="muted small" id="saved" style="align-self:center"></span></div>
+    </section>
+
+    <section class="frame" id="sec-about">
+      <div class="panel-head"><h2 data-i18n="set.about">About</h2></div>
+      <div class="deps" id="about"></div>
+    </section>
+  </div></div>
+</div>
+
+<script>
+const H = S.H, t_ = H.t, $ = s => document.querySelector(s);
+let cfg = null;
+
+function toggles() {
+  $('#look').innerHTML = Object.keys(H.LOOKS).map(k => `<button data-v="${k}" class="${k === H.look ? 'on' : ''}">${S.esc(t_('look.' + k))}</button>`).join('');
+  document.querySelectorAll('#lang button').forEach(b => b.classList.toggle('on', b.dataset.v === H.lang));
+  document.querySelectorAll('#help button').forEach(b => b.classList.toggle('on', (b.dataset.v === '1') === !!H.help));
+}
+$('#look').onclick = e => { const b = e.target.closest('button'); if (b && b.dataset.v !== H.look) { H.setLook(b.dataset.v); toggles(); } };
+$('#lang').onclick = e => { const b = e.target.closest('button'); if (b && b.dataset.v !== H.lang) { H.setLang(b.dataset.v); } };
+$('#help').onclick = e => { const b = e.target.closest('button'); if (b) { H.setHelp(b.dataset.v === '1'); toggles(); } };
+
+async function loadDevices() {
+  const r = await fetch('/api/sync/config');
+  if (!r.ok) { document.querySelectorAll('.synconly').forEach(el => (el.hidden = true)); return; }
+  cfg = await r.json();
+  $('#sXml').value = cfg.xml_path || '';
+  $('#sXmlResolved').textContent = t_('set.using', { p: cfg.xml_resolved });
+  $('#sLib').value = cfg.library_root;
+  $('#sFiio').value = cfg.fiio_mount;
+  $('#sFiioPick').innerHTML = `<option value="">${t_('set.pickVolume')}</option>` +
+    cfg.volumes.map(v => `<option value="${S.esc(v.path)}">${S.esc(v.name)} — ${S.esc(v.fs)}</option>`).join('');
+  $('#sAndroid').value = cfg.fiio_android_root;
+  $('#sBitrate').value = cfg.garmin_bitrate;
+  $('#sPlline').value = cfg.garmin_playlist_line;
+  $('#deps').innerHTML = `libmtp (${t_('set.mtp')}): <b class="${cfg.libmtp ? 'okmsg' : 'errmsg'}">${cfg.libmtp ? '✓' : '✗ brew install libmtp'}</b><br>
+    ffmpeg (${t_('set.ffmpeg')}): <b class="${cfg.ffmpeg ? 'okmsg' : 'errmsg'}">${cfg.ffmpeg ? '✓' : '✗ brew install ffmpeg'}</b>`;
+}
+$('#sFiioPick').onchange = e => { if (e.target.value) $('#sFiio').value = e.target.value; };
+$('#save').onclick = async () => {
+  try {
+    const r = await fetch('/api/sync/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+      xml_path: $('#sXml').value.trim() || null, library_root: $('#sLib').value.trim(), fiio_mount: $('#sFiio').value.trim(),
+      fiio_android_root: $('#sAndroid').value.trim(), garmin_bitrate: $('#sBitrate').value, garmin_playlist_line: $('#sPlline').value }) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
+    $('#saved').textContent = t_('set.saved');
+    setTimeout(() => ($('#saved').textContent = ''), 2500);
+    H.emit('syncconfig');
+    loadDevices();
+  } catch (err) { S.toast(err.message); }
+};
+
+async function about() {
+  const v = await H.api('/api/version').catch(() => ({ version: '?' })), rb = S.data.rekordbox || {};
+  $('#about').innerHTML = `${t_('set.server')}: <b>${S.esc(v.version)}</b><br>${t_('set.libSize', { n: S.tracks.length.toLocaleString(), p: S.data.playlists.length })}<br>
+    rekordbox: ${rb.imported ? t_('rbStatus', { n: (rb.matched || 0).toLocaleString(), a: new Date(rb.exported * 1000).toLocaleDateString() }) : S.esc(t_('rbNone', { p: rb.path || '' }))}<br>
+    <span class="muted">${t_('set.shortcut')}</span>`;
+}
+
+S.ready.then(() => {
+  toggles(); loadDevices(); about();
+  H.registerView('settings', {
+    save: () => ({}), load() {},
+    focus(section) { const el = document.getElementById('sec-' + section); if (el) el.scrollIntoView({ block: 'start' }); },
+  });
+});
+H.on('lang', () => { toggles(); if (cfg) loadDevices(); about(); });
+H.on('look', toggles);
+</script>
+</body>
+</html>

@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Summit Search</title>
+<link rel="stylesheet" href="/web/shared.css">
+<script src="/web/map.js"></script>
+<style>
+  /* layout only: components come from shared.css */
+  .bigq { flex: 1; max-width: 560px; font-size: 15px; padding: 10px 14px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
+  .row .meta { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+  .row .score { width: 46px; flex: none; }
+  .row .addpl { visibility: hidden; }
+  .row:hover .addpl { visibility: visible; }
+  .cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 28px; }
+  @media (max-width: 1100px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="pagehead">
+    <h1 id="title" data-i18n="nav.search">Search</h1>
+    <input class="bigq" id="q" data-i18n-ph="searchPh" autocomplete="off" spellcheck="false">
+    <span class="grow"></span>
+    <button class="primary" id="playAll" disabled>▶ <span data-i18n="playAllShort">Play</span></button>
+    <button id="toMap" disabled data-i18n="showOnMap">Show on map</button>
+    <button id="save" disabled data-i18n="savePlaylist">Save as playlist</button>
+  </div>
+  <div class="pagebody" id="body"></div>
+</div>
+
+<script>
+const H = S.H, t_ = H.t, body = document.getElementById('body'), qEl = document.getElementById('q');
+// mode: 'query' (a name or a vibe) or 'similar' (the songs that sound most like one song: the track menu's "Similar songs")
+const st = { mode: 'query', q: '', artists: [], songs: [], vibe: [], all: false, busy: false, seed: null, sim: [], n: 25 };
+try { st.n = +localStorage.getItem('summit.simN') || 25; } catch (e) {}
+let seq = 0;
+
+S.ready.then(() => {
+  render();
+  H.registerView('search', {
+    save: () => ({ mode: st.mode, q: st.q, seed: st.seed }),
+    load(v) { return v.mode === 'similar' && v.seed != null ? similar(v.seed) : run(v.q || ''); },
+    run(q) { return run(q); },
+    similar(i) { return similar(i); },
+  });
+});
+
+async function run(q) {
+  q = (q || '').trim();
+  const my = ++seq;
+  Object.assign(st, { mode: 'query', q, all: false, artists: [], songs: [], vibe: [] });
+  qEl.value = q; H.query = q; H.emit('query', q);
+  if (!q) { render(); return; }
+  const b = H.browse();
+  st.artists = b.searchArtists(q, 8);
+  st.songs = b.songs(q, 500);
+  st.busy = true; render();
+  try {
+    const have = new Set(st.songs), res = await H.api(`/api/search?q=${encodeURIComponent(q)}&n=${H.searchOpts.n + Math.min(have.size, 200)}&mode=vibe`);
+    if (my !== seq) return;
+    st.vibe = res.filter(r => !have.has(r.i)).slice(0, H.searchOpts.n);
+  } catch (err) { S.toast(err.message); }
+  st.busy = false; render();
+}
+
+async function similar(i) {
+  const my = ++seq;
+  Object.assign(st, { mode: 'similar', seed: i, sim: [], busy: true });
+  qEl.value = ''; render();
+  try { const sim = await H.neighbors(i, st.n); if (my !== seq) return; st.sim = sim; } catch (err) { S.toast(err.message); }
+  st.busy = false; render();
+}
+
+const everything = () => (st.mode === 'similar' ? [st.seed, ...st.sim] : [...st.songs, ...st.vibe.map(r => r.i)]);
+const listLabel = () => (st.mode === 'similar' ? t_('similarTo', { x: S.tracks[st.seed].title }) : t_('search', { x: st.q }));
+function render() {
+  document.getElementById('title').textContent = t_(st.mode === 'similar' ? 'ctx.similar' : 'nav.search');
+  if (st.mode === 'similar') return renderSimilar();
+  const any = st.songs.length || st.vibe.length;
+  ['playAll', 'toMap', 'save'].forEach(id => (document.getElementById(id).disabled = !any));
+  if (!st.q) { body.innerHTML = `<div class="empty" style="max-width:520px;margin:40px auto">${t_('searchEmpty')}</div>`; return; }
+  const shown = st.all ? st.songs : st.songs.slice(0, 25);
+  body.innerHTML = `
+    ${st.artists.length ? `<div class="section"><h3>${t_('artists')}</h3><div class="tiles">${st.artists.map(a => `<div class="tile" data-act="artist" data-name="${S.esc(a.name)}">
+      <span class="cover" style="background-image:url(/art/${S.tracks[a.tracks[0]].id}?s=96)"></span><div style="min-width:0"><b>${S.esc(a.name)}</b><span>${t_('nTracks', { n: a.tracks.length })}</span></div></div>`).join('')}</div></div>` : ''}
+    <div class="cols">
+      <div class="section"><h3>${t_('songs')} <span class="muted" style="text-transform:none;letter-spacing:0">${st.songs.length || ''}</span></h3>
+        ${shown.map(j => row(j, 'songs')).join('') || `<div class="muted small" style="padding:6px 8px">${t_('noNameMatches')}</div>`}
+        ${st.songs.length > shown.length ? `<button class="ghost small" data-act="all">${t_('showAllN', { n: st.songs.length })}</button>` : ''}</div>
+      <div class="section"><h3>${t_('soundsLikeQ', { x: S.esc(st.q) })}</h3>
+        ${st.busy ? `<div class="progress indet" style="margin:10px 8px"><b></b></div>` : st.vibe.map(r => row(r.i, 'vibe', r.score)).join('') || `<div class="muted small" style="padding:6px 8px">—</div>`}</div>
+    </div>`;
+}
+function renderSimilar() {
+  ['playAll', 'toMap', 'save'].forEach(id => (document.getElementById(id).disabled = st.seed == null));
+  const t = S.tracks[st.seed];
+  body.innerHTML = `
+    <div class="section"><div class="kicker">${t_('similarHead')}</div>
+      <div class="tile" data-i="${st.seed}" data-list="seed" style="margin-top:8px;max-width:560px"><span class="cover" style="--c:${S.col(t.cluster)};background-image:url(/art/${t.id}?s=96)"></span>
+        <div style="min-width:0;flex:1"><b>${S.esc(t.title)}</b><span>${S.esc(t.artist)} · ${t.bpm ?? '—'} BPM · ${S.esc(t.key ?? '—')}</span></div>${S.heart(st.seed)}</div></div>
+    <div class="section"><h3 style="display:flex;align-items:center;gap:8px">${t_('soundsLike')}
+      <select id="simN" class="small" title="${t_('similarNTip')}">${[10, 25, 50, 100, 250].map(n => `<option ${n === st.n ? 'selected' : ''}>${n}</option>`).join('')}</select></h3>
+      ${st.busy ? `<div class="progress indet" style="margin:10px 8px"><b></b></div>` : st.sim.map(j => row(j, 'sim')).join('')}
+      <p class="hint">${t_('similarHint')}</p></div>`;
+}
+function row(j, list, score) {
+  const t = S.tracks[j];
+  return `<div class="row${H.player.current === j ? ' playing' : ''}" data-i="${j}" data-list="${list}" title="${t_('rowTip')}"><span class="dot" style="--c:${S.col(t.cluster)}"></span>
+    <span class="grow">${S.esc(t.title)} <span class="muted">· ${S.esc(t.artist)}</span></span>
+    ${score != null ? `<span class="progress score" title="${t_('match')}" style="height:4px"><b style="width:${Math.round(score * 100)}%"></b></span>` : ''}
+    <span class="meta">${t.bpm ?? ''}</span>${S.heart(j)}<button class="addpl" data-act="addpl" data-i="${j}" title="${t_('addToPl')}">＋</button></div>`;
+}
+
+qEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { H.navPush(); run(qEl.value); }
+  if (e.key === 'Escape') { qEl.value = ''; run(''); }
+});
+document.getElementById('playAll').onclick = () => H.playList(everything(), listLabel());
+document.getElementById('toMap').onclick = async () => {
+  if (st.mode === 'similar') { H.goTo(st.seed); return; }  // the map opens the song, with its "Sounds like" list
+  await H.open('map'); await H.search(st.q);  // the map's Selection shows the same query (its own search options)
+};
+document.getElementById('save').onclick = async () => {
+  const n = prompt(t_('playlistName'), st.mode === 'similar' ? listLabel() : st.q); if (!n) return;
+  try { await H.createPlaylist(n, everything()); S.toast(t_('saved', { x: n })); } catch (err) { S.toast(err.message); }
+};
+body.addEventListener('click', e => {
+  const el = e.target.closest('[data-act]');
+  if (el && el.dataset.act === 'artist') { H.openArtist(el.dataset.name); return; }
+  if (el && el.dataset.act === 'addpl') { H.playlistMenu(el, [+el.dataset.i]); return; }
+  if (el && el.dataset.act === 'all') { st.all = true; render(); return; }
+  const r = e.target.closest('[data-list][data-i]'); if (!r || e.target.closest('button') || e.detail > 1) return;
+  const L = r.dataset.list, q = L === 'songs' ? st.songs : L === 'vibe' ? st.vibe.map(x => x.i) : everything();
+  H.player.play(+r.dataset.i, { queue: q, label: listLabel() });
+});
+body.addEventListener('change', e => {
+  if (e.target.id !== 'simN') return;
+  st.n = +e.target.value; try { localStorage.setItem('summit.simN', st.n); } catch (err) {}
+  similar(st.seed);
+});
+body.addEventListener('dblclick', e => { const r = e.target.closest('[data-list][data-i]'); if (r && !e.target.closest('button')) H.dblGoTo(e, +r.dataset.i); });
+H.on('player', i => body.querySelectorAll('[data-list][data-i]').forEach(r => r.classList.toggle('playing', +r.dataset.i === i)));
+H.on('lang', render);
+H.on('space', () => { if (st.mode === 'similar' && st.seed != null) similar(st.seed); });  // "similar" depends on the space
+</script>
+</body>
+</html>

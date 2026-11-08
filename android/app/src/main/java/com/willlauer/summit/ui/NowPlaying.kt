@@ -7,7 +7,6 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -112,6 +111,7 @@ fun NowPlaying() {
                         Spacer(Modifier.weight(1f))
                         Text(fmtDur((ps.durationMs / 1000).toInt().takeIf { it > 0 } ?: t.dur), style = MaterialTheme.typography.labelMedium, color = C.Muted)
                     }
+                    Spacer(Modifier.height(10.dp))
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = { app.player.setShuffle(!ps.shuffle) }) { Icon(PI.Shuffle, "Shuffle", tint = if (ps.shuffle) C.Cyan else C.Muted) }

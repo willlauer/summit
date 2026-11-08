@@ -168,15 +168,16 @@ function visible() {
 // ---- playlist ----
 const playlist = () => S.data.playlists.find(p => p.id === st.plId && p.kind === 'playlist');
 const inPl = i => { const p = playlist(); return !!p && p.ids.includes(S.tracks[i].id); };
-async function ensurePlaylist() {
+// No playlist chosen yet: ask which one (an existing one, or a new one), next to whatever was pressed.
+async function ensurePlaylist(anchor) {
   if (playlist()) return playlist();
-  const n = prompt(t_('playlistName'), t_('newPlaylist')); if (!n) return null;
-  const r = await H.createPlaylist(n, []);
-  st.plId = r.id; save();
+  const id = await H.choosePlaylist(anchor || document.getElementById('plsel'), t_('treeAddTo'));
+  if (id == null) return null;
+  st.plId = id; save(); renderPlaylist();
   return playlist();
 }
-async function toggleAdd(i, at) {
-  const p = await ensurePlaylist(); if (!p) return;
+async function toggleAdd(i, at, anchor) {
+  const p = await ensurePlaylist(anchor); if (!p) return;
   const id = S.tracks[i].id;
   if (p.ids.includes(id)) { await H.removeFromPlaylist(p.id, id); return; }
   await H.editPlaylist(p.id, ids => { ids = ids.filter(x => x !== id); ids.splice(Math.min(at ?? ids.length, ids.length), 0, id); return ids; });
@@ -215,7 +216,7 @@ function render() {
     let el = els[id];
     if (!el) {
       el = els[id] = document.createElement('div');
-      el.className = 'node'; el.dataset.id = id; el.draggable = true;
+      el.className = 'node'; el.dataset.id = id; el.dataset.track = n.i; el.draggable = true;
       el.style.setProperty('--c', S.col(t.cluster));
       el.innerHTML = cardHTML(id);
       const from = pos[n.parent];  // grow out of the parent
@@ -261,7 +262,7 @@ function drawEdges(vis) {
 function renderOutline(vis) {
   document.getElementById('olist').innerHTML = vis.map(id => {
     const n = node(id), t = S.tracks[n.i], added = inPl(n.i);
-    return `<div class="orow${id === st.focus ? ' focus' : ''}${added ? ' added' : ''}" data-id="${id}" style="padding-left:${6 + n.depth * 14}px" title="${t_('treeJumpTip')}">
+    return `<div class="orow${id === st.focus ? ' focus' : ''}${added ? ' added' : ''}" data-id="${id}" data-track="${n.i}" style="padding-left:${6 + n.depth * 14}px" title="${t_('treeJumpTip')}">
       <span class="lvl">${n.kids.length ? (n.open ? '▾' : '▸') : '·'}</span><span class="dot" style="--c:${S.col(t.cluster)}"></span>
       <span class="grow">${S.esc(t.title)} <span class="muted">· ${S.esc(t.artist)}</span></span>${added ? '<span class="ok">✓</span>' : ''}</div>`;
   }).join('') || `<div class="empty">${t_('treeOutlineEmpty')}</div>`;
@@ -366,7 +367,7 @@ world.addEventListener('click', async e => {
     if (b && b.dataset.act === 'more') { st.focus = b.dataset.id; await expand(b.dataset.id, st.branch); return; }
     if (!card) return;
     const id = card.dataset.id, n = node(id);
-    if (b && b.dataset.act === 'add') { st.focus = id; await toggleAdd(n.i); return; }
+    if (b && b.dataset.act === 'add') { st.focus = id; await toggleAdd(n.i, undefined, b); return; }
     if (b && b.dataset.act === 'exp') { st.focus = id; n.open ? collapse(id) : await expand(id); return; }
     if (b && b.dataset.act === 'kill') { H.navPush(); removeNode(id); return; }
     if (e.detail > 1) return;  // second click of a double-click

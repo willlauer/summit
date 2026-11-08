@@ -8,8 +8,29 @@
 <script src="/web/i18n.js"></script>
 <style>
   /* layout only: components come from shared.css */
-  body { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
-  header.top { gap: 14px; }
+  body { display: grid; grid-template-columns: var(--side-w, 196px) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas: "head head" "side main" "player player"; }
+  header.top { grid-area: head; gap: 14px; }
+  #side { grid-area: side; border-right: 1px solid var(--line); }
+  #side .foot { margin-top: auto; padding-top: 10px; }
+  #side .foot .navitem { width: 100%; }
+  #frames { grid-area: main; }
+  #player { grid-area: player; }
+  .brand { width: calc(var(--side-w, 196px) - 30px); }
+  .viewctl { display: flex; align-items: center; gap: 12px; }
+  .viewctl[hidden] { display: none; }
+  body:not(.mapmode) .mapctl { display: none !important; }
+  .spacer { flex: 1; }
+  /* narrow windows: icons-only sidebar */
+  @media (max-width: 1180px) {
+    body { --side-w: 56px; }
+    .brand span, #side h3, #side .label, #side .n { display: none; }
+    .brand { width: auto; }
+    #side .navitem { justify-content: center; padding: 9px 0; }
+    #side .navitem .led { position: absolute; margin: -14px 0 0 16px; }
+    #side .navitem { position: relative; }
+    .viewctl .ctl > span:first-child { display: none; }
+  }
   .search { flex: 1; min-width: 160px; max-width: 420px; }
   .search { display: flex; align-items: center; gap: 4px; }
   .search input { width: 100%; }
@@ -44,32 +65,51 @@
     <span>Summit</span>
   </div>
   <div class="navbtns"><button id="back" class="ghost" data-i18n-title="backTip" disabled>‹</button><button id="fwd" class="ghost" data-i18n-title="fwdTip" disabled>›</button></div>
-  <div class="tabs" id="modes"><button data-v="map" class="on" data-i18n="mode.map">Map</button><button data-v="tag" data-i18n="mode.tag">Tag</button><button data-v="flow" data-i18n="mode.flow">Flow</button><button data-v="tree" data-i18n="mode.tree">Tree</button></div>
-  <div class="seg" id="space"></div>
-  <button id="v3d" class="small" data-i18n-title="v3dTip">3D</button>
-  <label class="ctl"><span data-i18n="color">Color</span> <select id="color"></select></label>
-  <span class="ctl"><span data-i18n="labels">Labels</span>
-    <span class="seg" id="labelsTog"><button data-v="fam" data-i18n="genres">Genres</button><button data-v="sub" data-i18n="subgenres">Subgenres</button></span></span>
   <div class="search"><input id="q" data-i18n-ph="searchPh" placeholder="Search a vibe or a name" autocomplete="off" spellcheck="false"><button id="searchOpts" class="small ghost" data-i18n-title="searchOptsTip">⚙</button></div>
+  <div class="viewctl" id="viewctl">
+    <div class="seg mapctl" id="space"></div>
+    <button id="v3d" class="small mapctl full" data-i18n-title="v3dTip">3D</button>
+    <label class="ctl mapctl full"><span data-i18n="color">Color</span> <select id="color"></select></label>
+    <span class="ctl mapctl full"><span data-i18n="labels">Labels</span>
+      <span class="seg" id="labelsTog"><button data-v="fam" data-i18n="genres">Genres</button><button data-v="sub" data-i18n="subgenres">Subgenres</button></span></span>
+  </div>
+  <span class="spacer"></span>
   <button id="libBtn" class="small ghost" hidden></button>
-  <div class="seg" id="look" data-i18n-title="lookTip"></div>
-  <div class="seg" id="lang"><button data-v="en">EN</button><button data-v="ja">日本語</button></div>
   <span class="help hint small" data-i18n-html="shellHelp"></span>
 </header>
+<nav class="nav surface" id="side">
+  <h3 data-i18n="nav.explore">Explore</h3>
+  <button class="navitem" data-v="map"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20m0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16m4.2 3.8-5.6 2.8-2.8 5.6 5.6-2.8zM12 10.8a1.2 1.2 0 1 1 0 2.4 1.2 1.2 0 0 1 0-2.4"/></svg><span class="label" data-i18n="mode.map">Map</span></button>
+  <button class="navitem" data-v="tag"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M3 3h8.6l9.4 9.4-8.6 8.6L3 11.6zm2 2v5.8l7.4 7.4 5.8-5.8L10.8 5zm2.8 1.3a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3"/></svg><span class="label" data-i18n="mode.tag">Tag</span></button>
+  <button class="navitem" data-v="flow"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 17a3 3 0 1 1 0 .01zm16-10a3 3 0 1 1 0 .01zM6.6 15.8c3-.6 4-2.6 5-4.6s2.2-4.2 5.6-4.9l.4 2c-2.5.5-3.3 2-4.2 3.8-1.1 2.2-2.4 4.8-6.4 5.6z"/></svg><span class="label" data-i18n="mode.flow">Flow</span></button>
+  <button class="navitem" data-v="tree"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M10 3h4v4h-1v3h6v4h1v4h-4v-4h1v-2h-4v2h1v4h-4v-4h1v-2H7v2h1v4H4v-4h1v-4h6V7h-1z"/></svg><span class="label" data-i18n="mode.tree">Tree</span></button>
+  <h3 data-i18n="nav.library">Library</h3>
+  <button class="navitem" data-v="search"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M10 3a7 7 0 0 1 5.6 11.2l5.1 5.1-1.4 1.4-5.1-5.1A7 7 0 1 1 10 3m0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10"/></svg><span class="label" data-i18n="nav.search">Search</span></button>
+  <button class="navitem" data-v="discover"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M11 2h2l1.2 5.3L19 5l-2.3 4.8L22 11v2l-5.3 1.2L19 19l-4.8-2.3L13 22h-2l-1.2-5.3L5 19l2.3-4.8L2 13v-2l5.3-1.2L5 5l4.8 2.3zm1 6.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7"/></svg><span class="label" data-i18n="nav.discover">Discover</span></button>
+  <button class="navitem" data-v="library" data-tab="artists"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 3h3v18H4zm5 0h3v18H9zm5.2.6 2.9-.8 4.7 17.4-2.9.8z"/></svg><span class="label" data-i18n="nav.browse">Library</span></button>
+  <button class="navitem" data-v="playlists"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M3 5h13v2H3zm0 5h13v2H3zm0 5h8v2H3zm15-5h3v2h-1v6.5a2.5 2.5 0 1 1-2-2.45z"/></svg><span class="label" data-i18n="tab.playlists">Playlists</span><span class="n" id="navPl"></span></button>
+  <button class="navitem" data-v="library" data-tab="liked"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 21 3.5 12.6A5.2 5.2 0 0 1 12 6a5.2 5.2 0 0 1 8.5 6.6z"/></svg><span class="label" data-i18n="tab.liked">Liked</span><span class="n" id="navLiked"></span></button>
+  <h3 data-i18n="nav.devices" class="synconly">Devices</h3>
+  <button class="navitem synconly" data-v="sync"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 2h8v4h2v12a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V6h2zm2 2v2h4V4zM8 8v10a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V8zm3 2h2v5h1.5L12 18l-2.5-3H11z"/></svg><span class="label" data-i18n="mode.sync">Sync</span><span class="led" id="syncLed"></span></button>
+  <div class="foot"><button class="navitem" data-v="settings"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7m7.43-2.53a7.8 7.8 0 0 0 0-1.94l2.11-1.65-2-3.46-2.49 1a7.3 7.3 0 0 0-1.68-.98L15 3h-4l-.37 2.44c-.6.24-1.17.57-1.68.98l-2.49-1-2 3.46 2.11 1.65a7.8 7.8 0 0 0 0 1.94l-2.11 1.65 2 3.46 2.49-1c.51.41 1.08.74 1.68.98L11 21h4l.37-2.44c.6-.24 1.17-.57 1.68-.98l2.49 1 2-3.46z"/></svg><span class="label" data-i18n="nav.settings">Settings</span></button></div>
+</nav>
 <div id="frames"><div class="boot" id="boot" data-i18n="loading">Loading library</div></div>
 <footer id="player"></footer>
 
 <script>
 const H = window.Summit, frames = document.getElementById('frames');
-const PAGES = { map: '/web/map.html', tag: '/web/tag.html', flow: '/web/flow.html', tree: '/web/tree.html' };
+const PAGES = { map: '/web/map.html', tag: '/web/tag.html', flow: '/web/flow.html', tree: '/web/tree.html',
+  search: '/web/search.html', discover: '/web/discover.html', library: '/web/library.html', playlists: '/web/playlists.html', sync: '/web/sync.html', settings: '/web/settings.html' };
+// Modes that draw the map get its controls in the header (Tree only uses the space, for its similar songs);
+// search filters what they show, and opens the Search page from anywhere else.
+const MAPMODES = { map: 'full', tag: 'full', flow: 'full', tree: 'space' };
 const loaded = {};
 H.applyLang(document);
 
-// Navigation (tab clicks, Back / Forward, go-to) goes through here; the last mode is remembered for next launch.
+// Navigation (sidebar, Back / Forward, go-to) goes through here; the last mode is remembered for next launch.
 function setMode(m) {
   H.mode = m;
   try { localStorage.setItem('summit.mode', m); } catch (e) {}
-  document.querySelectorAll('#modes button').forEach(b => b.classList.toggle('on', b.dataset.v === m));
   if (!loaded[m]) {
     const f = document.createElement('iframe');
     f.src = PAGES[m]; f.dataset.mode = m;
@@ -77,9 +117,31 @@ function setMode(m) {
     frames.appendChild(f); loaded[m] = f;
   }
   Object.entries(loaded).forEach(([k, f]) => f.classList.toggle('on', k === m));
+  document.body.classList.toggle('mapmode', !!MAPMODES[m]);
+  document.querySelectorAll('#viewctl .full').forEach(el => (el.hidden = MAPMODES[m] !== 'full'));
+  sideMarks();
   H.emit('mode', m);
 }
 H.setMode = setMode;
+
+// Sidebar: which entry is on (Library and Liked are one page, told apart by its tab), counts and the device LED.
+let libTab = 'artists';
+H.on('libtab', t => { libTab = t; sideMarks(); });
+function sideMarks() {
+  document.querySelectorAll('#side .navitem').forEach(b => b.classList.toggle('on', b.dataset.v === H.mode
+    && (!b.dataset.tab || (b.dataset.tab === 'liked') === (libTab === 'liked'))));
+  if (!H.data) return;
+  document.getElementById('navPl').textContent = H.data.playlists.length || '';
+  document.getElementById('navLiked').textContent = H.data.liked.length || '';
+}
+H.on('playlists', sideMarks);
+H.on('likes', sideMarks);
+document.getElementById('side').onclick = e => {
+  const b = e.target.closest('.navitem'); if (!b) return;
+  const m = b.dataset.v, tab = b.dataset.tab;
+  if (m === 'library' && tab) { if (m !== H.mode || tab !== (libTab === 'liked' ? 'liked' : 'artists')) H.open('library', 'tab', tab); return; }
+  if (m !== H.mode) { H.navPush(); setMode(m); }
+};
 
 function colorMenu() {
   const d = H.data, sel = document.getElementById('color'), cats = {};
@@ -89,9 +151,7 @@ function colorMenu() {
   sel.value = H.color;
 }
 function syncToggles() {
-  document.getElementById('look').innerHTML = Object.entries(H.LOOKS).map(([k, l]) => `<button data-v="${k}" class="${k === H.look ? 'on' : ''}">${H.esc(H.t('look.' + k))}</button>`).join('');
   document.querySelectorAll('#labelsTog button').forEach(b => b.classList.toggle('on', !!H.labelShow[b.dataset.v]));
-  document.querySelectorAll('#lang button').forEach(b => b.classList.toggle('on', b.dataset.v === H.lang));
 }
 
 H.ready.then(d => {
@@ -103,12 +163,11 @@ H.ready.then(d => {
   H.renderPlayer();
   H.applyHelp(document);
   let m = 'map'; try { m = localStorage.getItem('summit.mode') || 'map'; } catch (e) {}
-  setMode(PAGES[m] ? m : 'map');
+  setMode(PAGES[m] && (m !== 'sync' || H.syncAvailable !== false) ? m : 'map');
   checkLibrary();
 });
 syncToggles();
 
-document.getElementById('modes').onclick = e => { const b = e.target.closest('button'); if (b && b.dataset.v !== H.mode) { H.navPush(); setMode(b.dataset.v); } };
 document.getElementById('back').onclick = () => H.back();
 document.getElementById('fwd').onclick = () => H.forward();
 H.on('nav', () => { document.getElementById('back').disabled = !H.canBack(); document.getElementById('fwd').disabled = !H.canForward(); });
@@ -126,23 +185,39 @@ document.getElementById('labelsTog').onclick = e => {
   const b = e.target.closest('button'); if (!b) return;
   H.setLabels({ ...H.labelShow, [b.dataset.v]: !H.labelShow[b.dataset.v] }); syncToggles();
 };
-document.getElementById('look').onclick = e => {
-  const b = e.target.closest('button'); if (!b || b.dataset.v === H.look) return;
-  H.setLook(b.dataset.v); syncToggles();
-  if (H.data) H.renderPlayer();
-};
-document.getElementById('lang').onclick = e => {
-  const b = e.target.closest('button'); if (!b || b.dataset.v === H.lang) return;
-  H.setLang(b.dataset.v); syncToggles();
-  if (H.data) { colorMenu(); H.renderPlayer(); }
-  if (lib.job) renderLib();
-};
+// Look and language are set in Settings; the shell redraws what it owns.
+H.on('look', () => { if (H.data) H.renderPlayer(); });
+H.on('lang', () => { if (H.data) { colorMenu(); H.renderPlayer(); } if (lib.job) renderLib(); });
 const q = document.getElementById('q');
 q.addEventListener('keydown', e => {
-  if (e.key === 'Enter') { H.navPush(); H.search(q.value).catch(err => H.toast(err.message)); }
+  if (e.key === 'Enter') {
+    H.navPush();
+    if (MAPMODES[H.mode] && H.mode !== 'tree') H.search(q.value).catch(err => H.toast(err.message));
+    else if (q.value.trim()) H.open('search', 'run', q.value.trim());
+  }
   if (e.key === 'Escape') { if (q.value) H.navPush(); q.value = ''; H.search(''); q.blur(); }
 });
 H.on('query', v => { q.value = v; });  // Back / Forward restore the search text with the view
+
+// Device sync is desktop-only: the server refuses it unless the page is open on this Mac. Hide it otherwise,
+// and keep the sidebar LED current (green: a device is plugged in; yellow: a sync is running).
+async function syncPoll() {
+  if (document.hidden) return;
+  try {
+    const r = await fetch('/api/sync/devices');
+    if (r.status === 403) { H.syncAvailable = false; document.querySelectorAll('.synconly').forEach(el => (el.hidden = true)); clearInterval(syncTimer); return; }
+    const { devices } = await r.json();
+    H.syncAvailable = true;
+    H.emit('syncdevices', devices);
+  } catch (e) {}
+}
+H.on('syncdevices', ds => {
+  const led = document.getElementById('syncLed');
+  led.className = 'led' + (ds.some(d => d.busy) ? ' busy' : ds.some(d => d.connected) ? ' on' : '');
+  led.title = ds.filter(d => d.connected).map(d => d.name).join(', ');
+});
+const syncTimer = setInterval(syncPoll, 8000);
+syncPoll();
 
 // Search options popover: result count and match mode, remembered in this browser; changing them re-runs the search.
 const optsBtn = document.getElementById('searchOpts');

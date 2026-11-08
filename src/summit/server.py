@@ -5,19 +5,21 @@ same API, plus /stream (phone-friendly audio) and /art (cover art)."""
 import json
 import subprocess
 import threading
+import time
 
 import numpy as np
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import clap_text, db
+from . import clap_text, db, rekordbox
 from .config import DEFAULT_SPACE, MAX_DURATION, ROOT, SPACES, TAG_SPACE, WEB
 from .export import export_all
 from .layout import load, space_matrix, unit
 from .media import TYPES, Prefetch, art_file, stream_file
 from .pipeline import Job
 from .scan import pending
+from .sync import api as sync_api
 from .tags import MIN_TRAIN, trained, zero_shot
 
 
@@ -41,6 +43,7 @@ class Library:
             self.ids = [i for i in ids if i in laid] if laid else ids
             self.idx = {i: k for k, i in enumerate(self.ids)}
             self.rows = {r["id"]: dict(r) for r in con.execute("SELECT * FROM tracks")}
+            self.load_rekordbox()
             if not self.ids:
                 self.C = self.X = np.zeros((0, 1))
                 self.styles, self.scores = [], {}
@@ -53,6 +56,14 @@ class Library:
             self.styles = [[[names[j], round(float(s[j]), 2)] for j in np.argsort(-s)[:3]] for s in S]
             self.zs = zero_shot(con, self.C)
             self.scores = {t: self.score(t) for t in self.tag_names()}
+
+    def load_rekordbox(self) -> None:
+        """rekordbox's BPM per track (from the last collection import)."""
+        with self.lock:
+            self.rb = {}
+            for r in self.con.execute("SELECT * FROM rb_tracks"):
+                a = json.loads(r["attrs"])
+                self.rb[r["track_id"]] = {"bpm": float(a.get("AverageBpm") or 0)}
 
     def tag_names(self) -> list[str]:
         return [r[0] for r in self.con.execute("SELECT name FROM tags ORDER BY id")]
@@ -88,9 +99,11 @@ class Library:
             tracks = []
             for k, i in enumerate(self.ids):
                 r = self.rows[i]
+                rbpm = self.rb.get(i, {}).get("bpm")  # rekordbox's BPM where it has one, so the two apps agree
                 tracks.append({
                     "id": i, "artist": r["artist"], "title": r["title"], "album": r["album"], "dur": round(r["duration"] or 0),
-                    "ext": r["format"], "bpm": round(r["bpm"]) if r["bpm"] else None, "key": r["key"], "audition": r["audition"] or 0,
+                    "ext": r["format"], "bpm": round(rbpm) if rbpm else round(r["bpm"]) if r["bpm"] else None,
+                    "key": r["key"], "audition": r["audition"] or 0,
                     "liked": i in liked_set, "added": round(r["added_at"] or 0),
                     **({} if lite else {"styles": self.styles[k], **tags.get(i, {"confirmed": [], "rejected": []})}),
                 })
@@ -116,6 +129,7 @@ class Library:
                 "tags": [dict(r) for r in con.execute("SELECT name, category FROM tags ORDER BY id")],
                 "scores": {} if lite else {t: np.round(v, 2).tolist() for t, v in self.scores.items()},
                 "playlists": self.playlists(), "folders": self.folders(), "liked": [i for i in liked if i in self.idx],
+                "rekordbox": rekordbox.status(con),
             }
 
     def playlists(self) -> list[dict]:
@@ -162,6 +176,30 @@ class GzipApi:
 
 
 app.add_middleware(GzipApi)
+
+
+def sync_source() -> dict:
+    """Summit's side of device sync (sync/library.py): every playlist with its folder path, Liked, and their files."""
+    with lib.lock:
+        folders = {f["id"]: f for f in lib.folders()}
+
+        def path(fid):
+            out, seen = [], set()
+            while fid in folders and fid not in seen:
+                seen.add(fid)
+                out.insert(0, folders[fid]["name"])
+                fid = folders[fid]["parent"]
+            return out
+
+        pls = [{"id": p["id"], "name": p["name"], "folder_path": path(p["folder"]), "ids": p["ids"]} for p in lib.playlists()]
+        liked = [r[0] for r in lib.con.execute("SELECT track_id FROM likes ORDER BY created_at DESC")]
+        want = {i for p in pls for i in p["ids"]} | set(liked)
+        tracks = {i: {k: lib.rows[i][k] for k in ("path", "artist", "title", "duration", "size")} for i in want if i in lib.rows}
+    return {"tracks": tracks, "playlists": pls, "liked": liked}
+
+
+sync_api.source = sync_source
+app.include_router(sync_api.router)
 
 
 @app.middleware("http")
@@ -258,6 +296,84 @@ def neighbors(i: int, k: int = 10, space: str = "combined"):
     sims = M @ M[i]
     sims[i] = -2
     return [int(j) for j in np.argsort(-sims)[:k]]
+
+
+@app.post("/api/plays")
+def add_play(id: str = Body(...), client: str = Body("desktop"), secs: float = Body(0)):
+    """A real listen (the player decides: 30 s heard, or half a short track)."""
+    if id not in lib.rows:
+        raise HTTPException(404)
+    with lib.lock:
+        lib.con.execute("INSERT INTO plays VALUES (?,?,?,?)", (id, time.time(), client, round(secs, 1)))
+        lib.con.commit()
+    return {"ok": True}
+
+
+DISCOVER_DAYS = 30
+HALF_LIFE = 7 * 86400  # recent plays count for more
+
+
+def _spread(pool: list[int], weights: np.ndarray, groups: list[int], n: int, rng) -> list[int]:
+    """n picks from pool, weighted, taking one per group in turn so a single region can't fill the list."""
+    by: dict[int, list[int]] = {}
+    order = rng.choice(len(pool), size=len(pool), replace=False, p=weights / weights.sum()) if len(pool) else []
+    for k in order:
+        by.setdefault(groups[k], []).append(pool[k])
+    lanes = list(by.values())
+    rng.shuffle(lanes)
+    out = []
+    while len(out) < n and any(lanes):
+        for lane in lanes:
+            if lane and len(out) < n:
+                out.append(lane.pop(0))
+    rng.shuffle(out)
+    return out
+
+
+@app.post("/api/discover")
+def discover(space: str = Body(DEFAULT_SPACE), n: int = Body(20), exclude: list[int] = Body([])):
+    """Two fresh samplings around what you've been playing (the last 30 days, recent plays weighted up):
+    far: tracks least like anything you've played, spread across clusters;
+    near: tracks close to it that you've never played (or liked). Without any plays yet, Liked stands in."""
+    n = max(1, min(n, 100))
+    with lib.lock:
+        if not lib.ids:
+            return {"near": [], "far": [], "basis": None}
+        now = time.time()
+        rows = lib.con.execute("SELECT track_id, at FROM plays WHERE at > ? ORDER BY at DESC LIMIT 500", (now - DISCOVER_DAYS * 86400,)).fetchall()
+        basis, w = "plays", {}
+        for tid, at in rows:
+            if tid in lib.idx:
+                w[lib.idx[tid]] = w.get(lib.idx[tid], 0) + 0.5 ** ((now - at) / HALF_LIFE)
+        liked = [lib.idx[r[0]] for r in lib.con.execute("SELECT track_id FROM likes") if r[0] in lib.idx]
+        if not w:
+            basis, w = "liked", {k: 1.0 for k in liked}
+        if not w:
+            return {"near": [], "far": [], "basis": None}
+        played = {lib.idx[r[0]] for r in lib.con.execute("SELECT DISTINCT track_id FROM plays") if r[0] in lib.idx}
+        M = lib.M.get(space, lib.X)
+        cluster_of = dict(lib.con.execute("SELECT track_id, cluster FROM layouts WHERE space=?", (space,)).fetchall())
+    seeds = np.array(list(w))
+    sw = np.array([w[k] for k in seeds])
+    # How close each track is to the recent listening: its best weighted cosine to any recent track.
+    S = M @ M[seeds].T
+    close = (S * (0.5 + 0.5 * sw / sw.max())).max(axis=1)
+    groups = [cluster_of.get(i, 0) for i in lib.ids]
+    rng = np.random.default_rng()
+    skip = set(exclude) | set(seeds.tolist())
+    N = len(lib.ids)
+    rank = np.argsort(close)  # least like recent listening first
+    far_pool = [int(k) for k in rank[: max(n * 6, N // 8)] if k not in skip] or [int(k) for k in rank[: n * 6] if k not in set(seeds.tolist())]
+    far_w = np.array([1.0 - close[k] for k in far_pool]) + 1e-3
+    known = played | set(liked) | set(seeds.tolist())
+    near_rank = [int(k) for k in rank[::-1] if k not in known]
+    near_pool = [k for k in near_rank[: max(n * 6, N // 10)] if k not in skip] or near_rank[: n * 6]
+    near_w = np.array([close[k] for k in near_pool]) ** 4 + 1e-3
+    return {
+        "far": _spread(far_pool, far_w, [groups[k] for k in far_pool], n, rng),
+        "near": _spread(near_pool, near_w, [groups[k] for k in near_pool], n, rng),
+        "basis": {"kind": basis, "tracks": [int(k) for k in seeds[np.argsort(-sw)][:200]], "plays": len(rows), "days": DISCOVER_DAYS},
+    }
 
 
 @app.post("/api/suggest")
@@ -433,9 +549,29 @@ def delete_folder(fid: int):
     return {"ok": True}
 
 
+@app.get("/api/rekordbox")
+def rekordbox_status():
+    return rekordbox.status(lib.con)
+
+
+@app.post("/api/rekordbox/import")
+def rekordbox_import(path: str | None = Body(None, embed=True)):
+    """Read rekordbox's collection export (File → Export Collection in xml format)."""
+    with lib.lock:
+        try:
+            res = rekordbox.import_collection(lib.con, path)
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e))
+        lib.load_rekordbox()
+    return res
+
+
 @app.post("/api/export")
 def export():
-    return export_all(lib.con)
+    with lib.lock:
+        res = export_all(lib.con)
+        lib.load_rekordbox()  # the export may have re-imported a newer rekordbox export first
+    return res
 
 
 @app.get("/api/pending")

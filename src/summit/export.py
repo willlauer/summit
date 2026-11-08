@@ -3,13 +3,16 @@
 
 In rekordbox: Preferences → Advanced → rekordbox xml → point "Imported Library" at data/exports/summit.xml,
 then drag playlists or whole folders from the "rekordbox xml" tree into your collection. Tracks match by file path.
+Tracks rekordbox already has carry its own fields (from the last collection import, see rekordbox.py).
 """
 
+import json
 import re
 import shutil
 from urllib.parse import quote
 from xml.sax.saxutils import quoteattr
 
+from . import rekordbox
 from .config import EXPORTS
 
 KIND = {"mp3": "MP3 File", "m4a": "M4A File", "aiff": "AIFF File", "aif": "AIFF File", "wav": "WAV File", "flac": "FLAC File"}
@@ -30,6 +33,8 @@ def export_all(con) -> dict:
     folders = [dict(r) for r in con.execute("SELECT id, name, parent_id FROM folders ORDER BY name COLLATE NOCASE")]
     if con.execute("SELECT 1 FROM likes LIMIT 1").fetchone():
         pls.insert(0, {"id": None, "name": "Liked", "folder_id": None})
+    if rekordbox.stale(con):
+        rekordbox.import_collection(con)  # rekordbox's latest track fields, so the export doesn't roll them back
     known = {f["id"] for f in folders}
     parent = lambda fid: fid if fid in known else None  # a dangling folder id counts as the top level
     EXPORTS.mkdir(parents=True, exist_ok=True)
@@ -38,10 +43,11 @@ def export_all(con) -> dict:
         shutil.rmtree(m3u_root)  # rewritten whole, so renamed / moved / deleted playlists don't leave stale copies
     tracks, rows_of = {}, {}
     for pl in pls:
-        rows = con.execute(
-            "SELECT t.* FROM playlist_tracks p JOIN tracks t ON t.id=p.track_id WHERE p.playlist_id=? ORDER BY p.position", (pl["id"],)
-        ).fetchall() if pl["id"] is not None else con.execute(
-            "SELECT t.* FROM likes l JOIN tracks t ON t.id=l.track_id ORDER BY l.created_at DESC").fetchall()
+        if pl["id"] is None:
+            rows = con.execute("SELECT t.* FROM likes l JOIN tracks t ON t.id=l.track_id ORDER BY l.created_at DESC").fetchall()
+        else:
+            rows = con.execute(
+                "SELECT t.* FROM playlist_tracks p JOIN tracks t ON t.id=p.track_id WHERE p.playlist_id=? ORDER BY p.position", (pl["id"],)).fetchall()
         rows_of[pl["id"]] = rows
         for r in rows:
             tracks.setdefault(r["id"], (len(tracks) + 1, r))
@@ -69,11 +75,16 @@ def export_all(con) -> dict:
     m3u_root.mkdir(exist_ok=True)
     x = ['<?xml version="1.0" encoding="UTF-8"?>', '<DJ_PLAYLISTS Version="1.0.0">', '  <PRODUCT Name="Summit" Version="0.1" Company=""/>',
          f'  <COLLECTION Entries="{len(tracks)}">']
-    for tid, r in tracks.values():
-        x.append(f'    <TRACK TrackID="{tid}" Name={quoteattr(r["title"] or "")} Artist={quoteattr(r["artist"] or "")} '
-                 f'Album={quoteattr(r["album"] or "")} Kind="{KIND.get(r["format"], "")}" TotalTime="{int(r["duration"] or 0)}" '
-                 f'Location={quoteattr(location(r["path"]))}/>')
+    rb = {r[0]: json.loads(r[1]) for r in con.execute("SELECT track_id, attrs FROM rb_tracks")}
+    for n, r in tracks.values():
+        if r["id"] in rb:  # rekordbox's own fields, so "load information in the tag" changes nothing
+            attrs = {"TrackID": str(n), **{k: v for k, v in rb[r["id"]].items() if k != "TrackID"}}
+        else:
+            attrs = {"TrackID": str(n), "Name": r["title"] or "", "Artist": r["artist"] or "", "Album": r["album"] or "",
+                     "Kind": KIND.get(r["format"], ""), "TotalTime": str(int(r["duration"] or 0)), "Location": location(r["path"])}
+        x.append("    <TRACK " + " ".join(f"{k}={quoteattr(v)}" for k, v in attrs.items()) + "/>")  # no marks: rekordbox keeps its cues
     x += ["  </COLLECTION>", "  <PLAYLISTS>", '    <NODE Type="0" Name="ROOT" Count="1">', f'      <NODE Type="0" Name="summit" Count="{count}">']
     x += body + ["      </NODE>", "    </NODE>", "  </PLAYLISTS>", "</DJ_PLAYLISTS>"]
     (EXPORTS / "summit.xml").write_text("\n".join(x) + "\n", encoding="utf-8")
-    return {"xml": str(EXPORTS / "summit.xml"), "m3u8": str(m3u_root), "playlists": len(pls), "folders": len(folders), "tracks": len(tracks)}
+    return {"xml": str(EXPORTS / "summit.xml"), "m3u8": str(m3u_root), "playlists": len(pls), "folders": len(folders), "tracks": len(tracks),
+            "rekordbox": sum(1 for r in tracks if r in rb)}

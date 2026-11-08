@@ -86,7 +86,7 @@
       const gx = window.Galaxy.create(div, {
         tooltip, onTap, onLongPress,
         onDoubleTap: onDoubleTap || ((i, info) => { if (i != null) H.dblGoTo(info.event, i); else gx.fit(); }),
-        onHover: (i, info) => { if (i != null && info.event && info.event.altKey) H.player.audition(i); },
+        onHover: (i, info) => { div._hover = i; if (i != null && info.event && info.event.altKey) H.player.audition(i); },  // _hover: the track menu (core.js)
       });
       div._g = gx; div._flat = flat;
       gx.setStyle(H.lookStyle());
@@ -208,6 +208,7 @@
   document.addEventListener('mouseup', e => H.mouse(e));
   document.addEventListener('mousedown', () => H.emit('mousedown', document), true);
   document.addEventListener('click', e => H.likeClick(e), true);
+  document.addEventListener('contextmenu', e => H.trackMenu(e));
   H.on('likes', i => document.querySelectorAll(`[data-like="${i}"]`).forEach(b => b.classList.toggle('on', d().tracks[i].liked)));
   H.applyLook(document);
   document.addEventListener('DOMContentLoaded', () => { H.applyHelp(document); H.applyLang(document); H.applyLook(document); });

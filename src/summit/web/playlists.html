@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Summit Playlists</title>
+<link rel="stylesheet" href="/web/shared.css">
+<script src="/web/map.js"></script>
+<style>
+  /* layout only: components come from shared.css */
+  body { display: grid; grid-template-columns: var(--tree-w, 320px) 3px minmax(0, 1fr); }
+  .side { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
+  .side .head { display: flex; align-items: center; gap: 6px; padding: 14px 12px 10px 16px; border-bottom: 1px solid var(--line); }
+  .side .head h1 { flex: 1; font-size: 18px; }
+  .side .scroll { flex: 1; min-height: 0; overflow: auto; padding: 6px 8px; }
+  .side .foot { padding: 10px 14px 14px; border-top: 1px solid var(--line); }
+  .side .foot .actions { margin-top: 0; }
+  .pl { display: flex; align-items: center; gap: 8px; padding: 7px 6px 7px calc(var(--d, 0) * 16px + 8px); cursor: pointer; border-radius: 8px; }
+  .pl:hover { background: rgba(255, 255, 255, .05); }
+  .pl.on { background: rgba(62, 230, 255, .1); box-shadow: inset 2px 0 0 var(--cyan); color: #fff; }
+  .pl .grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pl[draggable="true"] { cursor: grab; }
+  .pl.dragging { opacity: .4; }
+  .fold .grow { font-weight: 600; }
+  .pl .tools { visibility: hidden; display: flex; }
+  .pl:hover .tools { visibility: visible; }
+  .pl.drop-into { box-shadow: inset 0 0 0 1px var(--cyan); background: rgba(62, 230, 255, .06); }
+  .droptop { display: none; justify-content: center; color: var(--muted); font-size: 12px; border: 1px dashed var(--line); margin-top: 6px; }
+  .tree-drag .droptop { display: flex; }
+  .detail { min-width: 0; }
+  .title { display: flex; align-items: baseline; gap: 8px; }
+  .title h1 { font-size: 24px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hero { padding: 18px 22px 14px; border-bottom: 1px solid var(--line); }
+  .hero .stats { margin-top: 12px; }
+  tr[draggable="true"] { cursor: grab; }
+  tr.dragging { opacity: .4; }
+  tr.drop-before td { box-shadow: inset 0 2px 0 var(--cyan); }
+  tr.drop-after td { box-shadow: inset 0 -2px 0 var(--cyan); }
+  td.t { max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+  td.ar { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+  td .x { opacity: 0; }
+  tr:hover td .x { opacity: 1; }
+  :root[data-look="pixel"] .pl.on { background: #16283f; box-shadow: inset 3px 0 0 var(--cyan); }
+</style>
+</head>
+<body>
+<aside class="side surface" id="side">
+  <div class="head">
+    <h1 data-i18n="tab.playlists">Playlists</h1>
+    <button class="small" id="newPl" data-i18n-title="newPlaylist">＋</button>
+    <button class="small ghost" id="newF" data-i18n="newFolder">＋ Folder</button>
+  </div>
+  <div class="scroll" id="tree"></div>
+  <div class="foot" id="foot"></div>
+</aside>
+<div class="split-x" id="splitTree"></div>
+<main class="page detail" id="detail"></main>
+
+<script>
+const H = S.H, t_ = H.t, tree = document.getElementById('tree'), detail = document.getElementById('detail');
+const st = { sel: null };
+try { st.sel = JSON.parse(localStorage.getItem('summit.pl.sel') || 'null'); } catch (e) {}
+const cur = () => S.data.playlists.find(p => p.id === st.sel) || null;
+const editable = p => p && p.kind === 'playlist';
+
+// Folders closed in this browser (open is the default).
+let closedFolders = new Set();
+try { closedFolders = new Set(JSON.parse(localStorage.getItem('summit.closedFolders') || '[]')); } catch (e) {}
+const saveClosed = () => { try { localStorage.setItem('summit.closedFolders', JSON.stringify([...closedFolders])); } catch (e) {} };
+
+S.ready.then(() => {
+  S.splitter(document.getElementById('splitTree'), { target: document.getElementById('side'), cssVar: '--tree-w', min: 240, max: 560, key: 'summit.pl.tree' });
+  if (!cur() && S.data.playlists.length) st.sel = S.data.playlists[0].id;
+  render();
+  H.registerView('playlists', {
+    save: () => ({ sel: st.sel }),
+    load(v) { select(v.sel); },
+    open(id) { const p = S.data.playlists.find(p => p.id === id); if (p) { openFolders(p.folder); select(id); } },
+  });
+});
+
+function select(id) {
+  st.sel = id;
+  try { localStorage.setItem('summit.pl.sel', JSON.stringify(id)); } catch (e) {}
+  render();
+}
+function openFolders(fid) { for (let f = S.data.folders.find(x => x.id === fid); f; f = S.data.folders.find(x => x.id === f.parent)) closedFolders.delete(f.id); saveClosed(); }
+function render() { renderTree(); renderDetail(); }
+
+// The playlist tree: each folder's subfolders, then its playlists, as in the rekordbox export.
+const ago = ts => { if (!ts) return '—'; const m = Math.round((Date.now() / 1000 - ts) / 60); return m < 60 ? `${m} min` : m < 2880 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} d`; };
+function renderTree() {
+  const pls = S.data.playlists, fs = S.data.folders, known = new Set(fs.map(f => f.id));
+  const home = id => (known.has(id) ? id : null);  // a dangling folder id counts as the top level
+  const inside = fid => pls.filter(p => home(p.folder) === fid).length + fs.filter(f => home(f.parent) === fid).reduce((a, f) => a + inside(f.id), 0);
+  const plRow = (p, d) => `<div class="pl${p.id === st.sel ? ' on' : ''}" draggable="true" data-drag="pl:${p.id}" data-act="sel" data-id="${p.id}" style="--d:${d}">
+      <span class="grow">${S.esc(p.name)}</span><span class="muted small">${p.ids.length}${p.kind === 'flow' ? t_('flowKind') : ''}</span></div>`;
+  const level = (fid, d) => fs.filter(f => home(f.parent) === fid).map(f => {
+    const open = !closedFolders.has(f.id);
+    return `<div class="pl fold" draggable="true" data-drag="f:${f.id}" data-drop="${f.id}" data-act="fold" data-id="${f.id}" style="--d:${d}">
+        <span class="grow"><span class="muted">${open ? '▾' : '▸'}</span> ${S.esc(f.name)} <span class="muted small" style="font-weight:400">· ${t_('nPlaylists', { n: inside(f.id) })}</span></span>
+        <span class="tools"><button class="bare" data-act="plin" data-id="${f.id}" title="${t_('plInFolder')}">＋</button><button class="bare" data-act="subf" data-id="${f.id}" title="${t_('subfolder')}">⊞</button><button class="bare" data-act="renf" data-id="${f.id}" title="${t_('renameTip')}">✎</button><button class="bare" data-act="delf" data-id="${f.id}" title="${t_('deleteFolderTip')}">×</button></span></div>`
+      + (open ? level(f.id, d + 1) : '');
+  }).join('') + pls.filter(p => home(p.folder) === fid).map(p => plRow(p, d)).join('');
+  tree.innerHTML = pls.length || fs.length ? level(null, 0) + `<div class="pl droptop" data-drop="0">${t_('topLevel')}</div>` : `<div class="empty">${t_('noPlaylists')}</div>`;
+  const rb = S.data.rekordbox || {};
+  document.getElementById('foot').innerHTML = `
+    <div class="actions"><button class="primary small" data-act="export" ${pls.length || S.data.liked.length ? '' : 'disabled'}>${t_('exportRb')}</button><button class="small" data-act="rbimport">${t_('rbImport')}</button></div>
+    <p class="hint">${fs.length ? t_('dragToFolder') + ' ' : ''}${t_('exportHint')}</p>
+    <p class="hint">${rb.imported ? t_('rbStatus', { n: (rb.matched || 0).toLocaleString(), a: ago(rb.exported) }) + (rb.stale ? t_('rbStale') : '') : t_('rbNone', { p: S.esc(rb.path || '') })}</p>`;
+}
+
+function renderDetail() {
+  const p = cur();
+  if (!p) { detail.innerHTML = `<div class="empty" style="margin:auto">${t_(S.data.playlists.length ? 'plPick' : 'noPlaylists')}</div>`; return; }
+  const idxs = H.playlistTracks(p), off = p.ids.length - idxs.length, edit = editable(p);
+  const dur = idxs.reduce((a, j) => a + (S.tracks[j].dur || 0), 0);
+  const bpms = idxs.map(j => S.tracks[j].bpm).filter(Boolean).sort((a, b) => a - b);
+  const path = p.folder ? H.folderPath(p.folder) : '';
+  detail.innerHTML = `
+    <div class="hero">
+      <div class="kicker">${path ? S.esc(path) : t_('topLevelShort')}${p.kind === 'flow' ? t_('flowKind') : ''}</div>
+      <div class="title"><h1>${S.esc(p.name)}</h1><button class="bare" data-act="ren" title="${t_('renameTip')}">✎</button></div>
+      <div class="stats"><div class="stat"><b>${idxs.length}</b><span>${t_('tracks')}</span></div><div class="stat"><b>${S.fmtDur(dur)}</b><span>${t_('length')}</span></div>
+        ${bpms.length ? `<div class="stat"><b>${bpms[Math.floor(bpms.length * 0.1)]}–${bpms[Math.floor(bpms.length * 0.9)]}</b><span>BPM</span></div>` : ''}</div>
+      <div class="actions">
+        <button class="primary" data-act="play" ${idxs.length ? '' : 'disabled'}>${t_('play')}</button><button data-act="shuffle" ${idxs.length ? '' : 'disabled'}>${t_('shuffleBtn')}</button>
+        <button data-act="map" ${idxs.length ? '' : 'disabled'}>${t_('showOnMap')}</button>
+        ${H.syncAvailable !== false ? `<button data-act="device" title="${t_('sendToDeviceTip')}">${t_('sendToDevice')}</button>` : ''}
+        <span class="grow"></span><button class="danger" data-act="del">${t_('delete')}</button>
+      </div>
+      ${off ? `<p class="hint">${t_('plOffMap', { n: off })}</p>` : ''}
+    </div>
+    <div class="pagebody" style="padding-top:4px">${idxs.length ? `<table>
+      <thead><tr><th style="width:34px"></th><th></th><th>${t_('title')}</th><th>${t_('artist')}</th><th>BPM</th><th>${t_('key')}</th><th>${t_('length')}</th><th></th></tr></thead>
+      <tbody id="rows">${idxs.map((j, k) => row(j, k, edit)).join('')}</tbody></table>
+      ${edit ? `<p class="hint">${t_('dragToReorderLong')}</p>` : ''}` : `<div class="empty">${t_('plEmpty')}</div>`}</div>`;
+}
+function row(j, k, edit) {
+  const t = S.tracks[j];
+  return `<tr class="${H.player.current === j ? 'playing' : ''}" data-i="${j}" data-pos="${k}"${edit ? ' draggable="true"' : ''} title="${t_('rowTip')}">
+    <td class="idx">${k + 1}</td><td>${S.heart(j)}</td><td class="t">${S.esc(t.title)}</td><td class="muted ar">${S.esc(t.artist)}</td>
+    <td class="num">${t.bpm ?? ''}</td><td class="muted">${t.key ?? ''}</td><td class="muted num">${S.fmtDur(t.dur)}</td>
+    <td>${edit ? `<button class="x" data-act="rm" data-i="${j}" title="${t_('removeFromPl')}">×</button>` : ''}</td></tr>`;
+}
+
+// ---- actions ----
+document.getElementById('newPl').onclick = async () => {
+  const n = prompt(t_('playlistName'), t_('newPlaylist')); if (!n) return;
+  try { const r = await H.createPlaylist(n, []); select(r.id); } catch (err) { S.toast(err.message); }
+};
+document.getElementById('newF').onclick = async () => {
+  const n = prompt(t_('folderName'), t_('newFolderName'));
+  if (n && n.trim()) try { await H.createFolder(n.trim(), null); } catch (err) { S.toast(err.message); }
+};
+document.body.addEventListener('click', async e => {
+  const el = e.target.closest('[data-act]'); if (!el) return;
+  const a = el.dataset.act, p = cur(), f = S.data.folders.find(f => f.id === +el.dataset.id);
+  try {
+    if (a === 'sel') { if (+el.dataset.id !== st.sel) { H.navPush(); select(+el.dataset.id); } return; }
+    if (a === 'fold') { closedFolders.has(f.id) ? closedFolders.delete(f.id) : closedFolders.add(f.id); saveClosed(); renderTree(); return; }
+    e.stopPropagation();
+    if (a === 'play' || a === 'shuffle') { H.playList(H.playlistTracks(p), p.name, a === 'shuffle'); return; }
+    if (a === 'map') { H.showPlaylistOnMap(p.id); return; }
+    if (a === 'device') { H.sendToDevice(p.id); return; }
+    if (a === 'ren') { const n = prompt(t_('playlistName'), p.name); if (n && n.trim() && n.trim() !== p.name) await H.renamePlaylist(p.id, n.trim()); }
+    if (a === 'del' && confirm(t_('deletePl', { x: p.name }))) { await H.deletePlaylist(p.id); st.sel = (S.data.playlists[0] || {}).id ?? null; }
+    if (a === 'rm') await H.removeFromPlaylist(p.id, S.tracks[+el.dataset.i].id);
+    if (a === 'subf') { const n = prompt(t_('folderName'), t_('newFolderName')); if (n && n.trim()) { await H.createFolder(n.trim(), f.id); closedFolders.delete(f.id); saveClosed(); } }
+    if (a === 'plin') { const n = prompt(t_('playlistName'), t_('newPlaylist')); if (n) { const r = await H.createPlaylist(n, [], 'playlist', null, f.id); closedFolders.delete(f.id); saveClosed(); st.sel = r.id; } }
+    if (a === 'renf') { const n = prompt(t_('folderName'), f.name); if (n && n.trim() && n.trim() !== f.name) await H.renameFolder(f.id, n.trim()); }
+    if (a === 'delf' && confirm(t_('deleteFolder', { x: f.name }))) await H.deleteFolder(f.id);
+    if (a === 'export') {
+      const r = await H.exportAll();
+      S.data.rekordbox = await H.api('/api/rekordbox');
+      S.toast(t_('exported', { p: r.playlists, n: r.tracks }));
+    }
+    if (a === 'rbimport') {
+      const was = (S.data.rekordbox || {}).path, path = prompt(t_('rbPathPrompt'), was || ''); if (!path) return;
+      const r = await H.rekordboxImport(path.trim());
+      S.toast(t_('rbImported', { m: r.matched.toLocaleString(), n: r.tracks.toLocaleString() }));
+    }
+  } catch (err) { S.toast(err.message); }
+  render();
+});
+// Tracks: click plays the playlist from there; double-click goes to the song on the map.
+detail.addEventListener('click', e => {
+  const r = e.target.closest('tr[data-i]'); if (!r || e.target.closest('button') || e.detail > 1) return;
+  const p = cur(); H.player.play(+r.dataset.i, { queue: H.playlistTracks(p), label: p.name });
+});
+detail.addEventListener('dblclick', e => { const r = e.target.closest('tr[data-i]'); if (r && !e.target.closest('button')) H.dblGoTo(e, +r.dataset.i); });
+
+// Reorder by dragging rows.
+let dragPos = null;
+const dropMarks = () => detail.querySelectorAll('.drop-before, .drop-after').forEach(r => r.classList.remove('drop-before', 'drop-after'));
+detail.addEventListener('dragstart', e => {
+  const r = e.target.closest('tr[data-pos]'); if (!r || !editable(cur())) return;
+  dragPos = +r.dataset.pos; r.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', r.dataset.i);
+});
+detail.addEventListener('dragover', e => {
+  const r = e.target.closest('tr[data-pos]'); if (dragPos == null || !r) return;
+  e.preventDefault();
+  const b = r.getBoundingClientRect(); dropMarks(); r.classList.add(e.clientY > b.top + b.height / 2 ? 'drop-after' : 'drop-before');
+});
+detail.addEventListener('drop', async e => {
+  const r = e.target.closest('tr[data-pos]'), p = cur(); if (dragPos == null || !r || !editable(p)) return;
+  e.preventDefault();
+  const b = r.getBoundingClientRect(), to = +r.dataset.pos + (e.clientY > b.top + b.height / 2 ? 1 : 0);
+  const order = H.playlistTracks(p), [moved] = order.splice(dragPos, 1);
+  order.splice(to > dragPos ? to - 1 : to, 0, moved);
+  const offMap = p.ids.filter(id => S.data.byId[id] == null);  // tracks not on the map keep their place at the end
+  try { await H.setPlaylistIds(p.id, order.map(j => S.tracks[j].id).concat(offMap)); } catch (err) { S.toast(err.message); }
+});
+detail.addEventListener('dragend', () => { dragPos = null; dropMarks(); detail.querySelectorAll('.dragging').forEach(r => r.classList.remove('dragging')); });
+
+// File playlists and folders by dragging them onto a folder (or the top-level strip that appears while dragging).
+let treeDrag = null;
+const dropInto = () => tree.querySelectorAll('.drop-into').forEach(r => r.classList.remove('drop-into'));
+const within = (fid, root) => { for (let f = S.data.folders.find(x => x.id === fid); f; f = S.data.folders.find(x => x.id === f.parent)) if (f.id === root) return true; return false; };
+tree.addEventListener('dragstart', e => {
+  const r = e.target.closest('[data-drag]'); if (!r) return;
+  const [kind, id] = r.dataset.drag.split(':');
+  treeDrag = { kind, id: +id }; r.classList.add('dragging'); tree.classList.add('tree-drag');
+  e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', r.dataset.drag);
+});
+tree.addEventListener('dragover', e => {
+  const r = e.target.closest('[data-drop]'); if (!treeDrag || !r) return;
+  const to = +r.dataset.drop;
+  if (treeDrag.kind === 'f' && to && within(to, treeDrag.id)) return;  // not into itself or its own subfolders
+  e.preventDefault(); dropInto(); r.classList.add('drop-into');
+});
+tree.addEventListener('drop', async e => {
+  const r = e.target.closest('[data-drop]'), d = treeDrag; if (!d || !r) return;
+  e.preventDefault();
+  const to = +r.dataset.drop || null;
+  try {
+    if (d.kind === 'pl' && (S.data.playlists.find(p => p.id === d.id) || {}).folder !== to) await H.movePlaylist(d.id, to);
+    if (d.kind === 'f' && (S.data.folders.find(f => f.id === d.id) || {}).parent !== to) await H.moveFolder(d.id, to);
+    if (to) { closedFolders.delete(to); saveClosed(); render(); }
+  } catch (err) { S.toast(err.message); }
+});
+tree.addEventListener('dragend', () => { treeDrag = null; dropInto(); tree.classList.remove('tree-drag'); });
+
+H.on('playlists', () => { if (!cur() && S.data.playlists.length) st.sel = S.data.playlists[0].id; render(); });
+H.on('player', i => detail.querySelectorAll('tr[data-i]').forEach(r => r.classList.toggle('playing', +r.dataset.i === i)));
+H.on('lang', render);
+</script>
+</body>
+</html>
