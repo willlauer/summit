@@ -1,3 +1,16 @@
+RESUME ON THE MAC (sharper "similar tracks", branch sharper-similarity):
+  Similar tracks felt too general (neighbours = broad genre). Comparison changed, no re-analysis needed:
+  per-kind centring + partial whitening, Discogs styles added to Combined, hubness fix on neighbours / suggest.
+  Code: src/summit/similar.py (+ layout.space_matrix, server neighbors/suggest, config SPACES).
+  Not yet tested on the real library (written on the Windows box with no data). On the Mac:
+    git fetch && git checkout sharper-similarity && uv sync
+    summit similar-eval        # precision@10 vs playlist co-membership; compare to "before (raw cosine)" row
+    -> set WHITEN_POWER (similar.py) and combined kinds (config.py) to the winning row; drop the hub fix if it doesn't help
+    summit layout              # rebuild map families/sub-clusters on the new space
+    summit service restart     # neighbours/suggest pick it up on reload
+  If it wins: merge to main. If it is still too general: next idea is per-window matching on clap_windows
+  (best-matching sections instead of whole-track averages).
+
 Done: playlists (create / add / reorder), Back / Forward, double-click to go to a song. Waveform dropped (the player has a plain seek bar now).
 
 Done: switchable looks on the laptop (header: Classic / Pixel) and the phone (Library → ⚙, or the map's layers sheet).

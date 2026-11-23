@@ -14,6 +14,7 @@
     summit export               # rekordbox XML + m3u8 for all playlists
     summit rekordbox import [PATH]   # read rekordbox's collection export (its track info)
     summit rekordbox status
+    summit similar-eval         # how well "similar tracks" match your playlists, per way of comparing tracks
     summit status
 """
 
@@ -44,6 +45,7 @@ def main() -> None:
     rb.add_argument("action", choices=["import", "status"])
     rb.add_argument("path", nargs="?")
     sub.add_parser("status")
+    sub.add_parser("similar-eval")
     args = ap.parse_args()
     if args.cmd in ("scan", "analyze", "layout", "layout3d", "label", "update"):
         import atexit
@@ -112,6 +114,10 @@ def main() -> None:
             notify_server()
         else:
             print(rekordbox.status(con))
+    elif args.cmd == "similar-eval":
+        from .similar import evaluate
+
+        evaluate()
     elif args.cmd == "status":
         from . import db
         from .scan import pending

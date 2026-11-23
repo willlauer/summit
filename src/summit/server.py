@@ -15,7 +15,8 @@ from fastapi.staticfiles import StaticFiles
 from . import clap_text, db, rekordbox
 from .config import DEFAULT_SPACE, MAX_DURATION, ROOT, SPACES, TAG_SPACE, WEB
 from .export import export_all
-from .layout import load, space_matrix, unit
+from .layout import load, space_matrix
+from .similar import hubness, ranked, unit
 from .media import TYPES, Prefetch, art_file, stream_file
 from .pipeline import Job
 from .scan import pending
@@ -50,6 +51,7 @@ class Library:
                 return
             self.C = unit(load(con, "clap", self.ids))  # text search lives in CLAP space
             self.M = {s: space_matrix(con, s, self.ids) for s in SPACES}
+            self.R = {s: hubness(M) for s, M in self.M.items()}  # for hubness-corrected neighbour ranking
             self.X = self.M[TAG_SPACE]
             names = [n.split("---")[-1] for n in style_names()]
             S = load(con, "styles", self.ids)
@@ -292,9 +294,11 @@ def search(q: str, n: int = 60, mode: str = "both"):
 @app.get("/api/neighbors")
 def neighbors(i: int, k: int = 10, space: str = "combined"):
     """Most similar tracks by cosine in the full embedding space (not 2D map distance)."""
-    M = lib.M.get(space, lib.X)
-    sims = M @ M[i]
-    sims[i] = -2
+    if space not in lib.M:
+        space = TAG_SPACE
+    M = lib.M[space]
+    sims = ranked(M, lib.R[space], M[i])
+    sims[i] = -np.inf
     return [int(j) for j in np.argsort(-sims)[:k]]
 
 
@@ -379,12 +383,14 @@ def discover(space: str = Body(DEFAULT_SPACE), n: int = Body(20), exclude: list[
 @app.post("/api/suggest")
 def suggest(ids: list[str] = Body(...), k: int = Body(20), space: str = Body("combined")):
     """Tracks that fit a set (a playlist): nearest to the mean of its tracks, excluding the set itself."""
-    M = lib.M.get(space, lib.X)
+    if space not in lib.M:
+        space = TAG_SPACE
+    M = lib.M[space]
     rows = [lib.idx[i] for i in ids if i in lib.idx]
     if not rows:
         return []
-    sims = M @ unit(M[rows].mean(0, keepdims=True))[0]
-    sims[rows] = -2
+    sims = ranked(M, lib.R[space], unit(M[rows].mean(0, keepdims=True))[0])
+    sims[rows] = -np.inf
     return [int(j) for j in np.argsort(-sims)[:k]]
 
 

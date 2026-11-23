@@ -26,12 +26,12 @@ EFFNET_ONNX = MODELS / "discogs-effnet-bsdynamic-1.onnx"
 EFFNET_META = MODELS / "discogs-effnet-bsdynamic-1.json"
 
 # Embedding spaces the map can show. Each combines one or more per-track vector kinds (rows in `vectors`), each
-# L2-normalised and weighted equally. To try a new model: write its vectors under a new kind, add a space here,
+# centred, partially whitened and weighted equally (similar.py). "styles" are EffNet's Discogs style probabilities. To try a new model: write its vectors under a new kind, add a space here,
 # then `summit layout`. The app's space picker is built from this list.
 SPACES = {
     "clap": {"label": "CLAP", "kinds": ["clap"]},
     "effnet": {"label": "EffNet", "kinds": ["effnet"]},
-    "combined": {"label": "Combined", "kinds": ["clap", "effnet"]},
+    "combined": {"label": "Combined", "kinds": ["clap", "effnet", "styles"]},
 }
 DEFAULT_SPACE = "combined"
 TAG_SPACE = "combined"  # tag classifiers and vibes train on this space
