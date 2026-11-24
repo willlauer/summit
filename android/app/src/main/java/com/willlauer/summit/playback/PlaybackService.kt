@@ -34,13 +34,19 @@ class PlaybackService : MediaSessionService() {
         super.onCreate()
         val app = application as SummitApp
         val upstream = DefaultDataSource.Factory(this, OkHttpDataSource.Factory(app.http))
-        Streaming.init(this)
         val cached = CacheDataSource.Factory()
             .setCache(app.mediaCache)
             .setUpstreamDataSourceFactory(upstream)
             .setCacheKeyFactory { spec -> spec.key ?: spec.uri.lastPathSegment ?: spec.uri.toString() }
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
-        val data = ResolvingDataSource.Factory(cached, Streaming.resolver(this, app.mediaCache))  // adds ?q= and the cache key
+        // The offline store (newest 6 GB, OfflineSync) is read first and never written here; then the playback cache.
+        val offline = CacheDataSource.Factory()
+            .setCache(app.offlineCache)
+            .setUpstreamDataSourceFactory(cached)
+            .setCacheWriteDataSinkFactory(null)
+            .setCacheKeyFactory { spec -> spec.key ?: spec.uri.lastPathSegment ?: spec.uri.toString() }
+            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+        val data = ResolvingDataSource.Factory(offline, Streaming.resolver(this))  // adds ?q= and the cache key
         // Read far ahead (the rest of the song and into the next) so a patchy connection doesn't stall playback;
         // the default ~50 s / ~3 MB runs dry on cellular. Start after 0.5 s of audio (it arrives almost at once at
         // 128k), resume after a stall once 1.5 s is in.
@@ -59,7 +65,7 @@ class PlaybackService : MediaSessionService() {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         session = MediaSession.Builder(this, player).setSessionActivity(open).build()
-        val pre = Precacher(this, app.mediaCache, cached).also { precacher = it }
+        val pre = Precacher(this, cached).also { precacher = it }
         player.addListener(object : Player.Listener {
             override fun onEvents(p: Player, events: Player.Events) {
                 if (events.containsAny(Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_TIMELINE_CHANGED,

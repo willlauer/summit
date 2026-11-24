@@ -3,6 +3,7 @@ clusters, playlists, vibes and export. The desktop UI lives in web/ (same origin
 same API, plus /stream (phone-friendly audio) and /art (cover art)."""
 
 import json
+from pathlib import Path
 import subprocess
 import threading
 import time
@@ -812,8 +813,44 @@ def stream_info():
     from . import streaming
     from .media import coverage
 
+    with lib.lock:
+        off = offline_set()
     return {"coverage": coverage(lib.con), "job": stream_job.state(), "awake": streaming.awake_state(),
+            "offline": {"tracks": len(off["tracks"]), "bytes": off["bytes"], "budget_mb": off["budget_mb"], "oldest_added": off["oldest_added"]},
             "tailscale": streaming.tailscale()}
+
+
+OFFLINE_MB = 6144  # the phone keeps the most recently added tracks, up to this, in data-saver quality
+
+
+def offline_set(budget_mb: int = OFFLINE_MB) -> dict:
+    """The phone's offline set: the most recently added tracks whose 128k copies fit in the budget, newest first.
+    "Added" is rekordbox's DateAdded where the collection export has the track (Summit's own first scan stamped most
+    of the library with one day), else when Summit first saw the file."""
+    from .media import cached_path, needs_transcode
+
+    rb = rekordbox.dates_added(lib.con)
+    added = {t: rb.get(rekordbox.norm(lib.rows[t]["path"]), lib.rows[t]["added_at"] or 0) for t in lib.ids}
+    budget, used, out = budget_mb * 1024 * 1024, 0, []
+    for i in sorted(lib.ids, key=lambda t: -added[t]):
+        r = lib.rows[i]
+        p = cached_path(r, "low") if needs_transcode(r, "low") else Path(r["path"])
+        size = p.stat().st_size if p.exists() else 0
+        if not size:
+            continue  # not converted yet: next time
+        if used + size > budget:
+            break
+        used += size
+        out.append({"id": i, "bytes": size})
+    oldest = added[out[-1]["id"]] if out else None
+    return {"budget_mb": budget_mb, "bytes": used, "tracks": out, "oldest_added": oldest}
+
+
+@app.get("/api/offline")
+def offline(budget_mb: int = OFFLINE_MB):
+    """What the phone should keep offline (playback.OfflineSync): newest tracks first, 128k, within budget_mb."""
+    with lib.lock:
+        return offline_set(max(256, min(budget_mb, 65536)))
 
 
 @app.post("/api/stream/run")

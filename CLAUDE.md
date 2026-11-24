@@ -1,5 +1,17 @@
 # Summit: rules for agents
 
+## iTunes / Music files: NOT PERMITTED TO TOUCH. READ ONLY.
+
+- Agents are NOT PERMITTED TO TOUCH THE ITUNES FILES. They are READ ONLY: the music library
+  (`~/Music/Music/Media.localized`, `config.LIBRARY`, Settings › Devices "Music library folder"), the Music / iTunes
+  library databases and exports (`~/Music/Music/Music Library.musiclibrary`, anything under `~/Music/iTunes`,
+  `iTunes Library.xml`), and every audio file in them.
+- Never write, move, rename, delete, re-tag (no mutagen `.save()`), touch, chmod, or transcode in place any of them,
+  and never run a command that could (`rm`, `mv`, `sed -i`, `ffmpeg -y` with an output there, scripts with write
+  access). Reading them (scan, analyze, art, streaming, device sync) is fine. Anything derived goes under `data/`
+  (e.g. `data/cache/stream`, `data/cache/art`).
+- If a task seems to need changing a library file, stop and ask the user instead.
+
 ## rekordbox is off-limits except through `summit.rbguard`
 
 - Every read or change of rekordbox's own files (its library `master.db`, anything under `~/Library/Pioneer` or

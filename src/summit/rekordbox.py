@@ -61,6 +61,33 @@ def import_collection(con, path: str | None = None) -> dict:
     return {"path": str(src), "tracks": total, "matched": len(rows)}
 
 
+_dates: dict = {"key": None, "by_path": {}}
+
+
+def dates_added(con) -> dict[str, float]:
+    """{normalised file path: rekordbox's DateAdded as a timestamp} from the collection export (read only, cached
+    until the file changes). Empty if there's no export."""
+    import datetime
+    import xml.etree.ElementTree as ET
+
+    src = Path(get(con, "path") or DEFAULT_PATH).expanduser()
+    try:
+        key = (str(src), src.stat().st_mtime)
+    except OSError:
+        return {}
+    if _dates["key"] != key:
+        out = {}
+        for _, el in ET.iterparse(src):
+            if el.tag == "TRACK" and el.get("Location") and el.get("DateAdded"):
+                try:
+                    out[path_of(el.get("Location"))] = datetime.datetime.strptime(el.get("DateAdded"), "%Y-%m-%d").timestamp()
+                except ValueError:
+                    pass
+            el.clear()
+        _dates.update(key=key, by_path=out)
+    return _dates["by_path"]
+
+
 def stale(con) -> bool:
     """The export file changed since it was imported."""
     p = get(con, "path")

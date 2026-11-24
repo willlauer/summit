@@ -5,6 +5,7 @@ import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import coil3.ImageLoader
 import coil3.PlatformContext
@@ -35,8 +36,14 @@ class SummitApp : Application(), SingletonImageLoader.Factory {
     lateinit var player: PlayerConnection
 
     @get:OptIn(UnstableApi::class)
-    val mediaCache: SimpleCache by lazy {  // songs heard recently, so replays don't need the network
-        SimpleCache(File(cacheDir, "media"), LeastRecentlyUsedCacheEvictor(4L shl 30), StandaloneDatabaseProvider(this))
+    private val cacheDb by lazy { StandaloneDatabaseProvider(this) }
+    @get:OptIn(UnstableApi::class)
+    val mediaCache: SimpleCache by lazy {  // songs heard recently and the next few queued: 1 GB, least recently used goes
+        SimpleCache(File(cacheDir, "media"), LeastRecentlyUsedCacheEvictor(1L shl 30), cacheDb)
+    }
+    @get:OptIn(UnstableApi::class)
+    val offlineCache: SimpleCache by lazy {  // the newest 6 GB of the library (playback.OfflineSync), kept until it leaves the set
+        SimpleCache(File(filesDir, "offline"), NoOpCacheEvictor(), cacheDb)
     }
 
     override fun onCreate() {
@@ -44,7 +51,9 @@ class SummitApp : Application(), SingletonImageLoader.Factory {
         repo = Repo(this, Api(http, Repo.DEFAULT_SERVER), scope)
         player = PlayerConnection(this, repo, scope)
         player.connect()
-        scope.launch { repo.lib.filterNotNull().first(); player.onLibrary() }
+        scope.launch { repo.lib.filterNotNull().first(); player.onLibrary(); com.willlauer.summit.playback.OfflineSync.start(this@SummitApp) }
+        com.willlauer.summit.playback.Streaming.init(this, listOf(offlineCache, mediaCache))
+        com.willlauer.summit.playback.OfflineSync.watchWifi(this)
         repo.refresh()
     }
 

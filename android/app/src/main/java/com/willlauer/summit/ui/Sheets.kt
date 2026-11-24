@@ -308,4 +308,25 @@ fun StreamingPicker() {
         "low" -> "128k AAC everywhere: a third of the data."
         else -> "High quality on Wi-Fi, data saver (128k) on cellular."
     } + " The next three tracks download ahead, so skips start instantly.", Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodySmall)
+    Spacer(Modifier.height(16.dp))
+    OfflinePanel()
+}
+
+/** The offline store (playback.OfflineSync): the newest 6 GB, synced on Wi-Fi, with progress and Sync / Stop. */
+@Composable
+fun OfflinePanel() {
+    val summit = androidx.compose.ui.platform.LocalContext.current.applicationContext as com.willlauer.summit.SummitApp
+    val st by com.willlauer.summit.playback.OfflineSync.state.collectAsStateWithLifecycle()
+    val gb = { b: Long -> "%.1f".format(b / 1073741824.0) }
+    Text("Offline", style = MaterialTheme.typography.titleMedium)
+    Spacer(Modifier.height(6.dp))
+    Text(if (st.total == 0) "The newest ${com.willlauer.summit.playback.OfflineSync.BUDGET_MB / 1024} GB of your library, kept on the phone in data-saver quality. Syncs on Wi-Fi."
+        else "${st.done} of ${st.total} tracks · ${gb(st.bytesOnPhone)} of ${gb(st.bytesTotal)} GB on the phone", style = MaterialTheme.typography.bodyMedium)
+    if (st.total > 0) LinearProgressIndicator(progress = { st.done.toFloat() / st.total }, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), color = C.Cyan, trackColor = C.Line)
+    if (st.note.isNotEmpty()) Text(st.note, style = MaterialTheme.typography.bodySmall, color = C.Muted)
+    Spacer(Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (st.running) Chip("Stop", false) { com.willlauer.summit.playback.OfflineSync.stop() }
+        else Chip("Sync now", false) { com.willlauer.summit.playback.OfflineSync.start(summit) }
+    }
 }

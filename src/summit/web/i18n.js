@@ -277,6 +277,8 @@
     'st.awakeHint': ['On battery, closing the lid still sleeps the Mac.', 'バッテリー駆動中は蓋を閉じるとスリープします。'],
     'st.direct': ['direct ✓', '直接接続 ✓'], 'st.relay': ['via relay ({r}): slower', 'リレー経由 ({r}): 遅い'], 'st.offline': ['offline', 'オフライン'],
     'st.relayHint': ['Tailscale is relaying: turn on UPnP or NAT-PMP on your router (or set up a Tailscale peer relay) for a direct, faster path.', 'Tailscale がリレー中: ルーターで UPnP か NAT-PMP をオンにする（または Tailscale のピアリレーを設定）と直接接続で速くなります。'],
+    'st.offline2': ['Kept on the phone', 'スマホに保存'], 'st.offlineN': ['{n} tracks · {g} of {b} GB', '{n} 曲 · {g} / {b} GB'],
+    'st.offlineHint': ['The newest tracks (added since {d}) in data-saver quality; the phone syncs them on Wi-Fi.', '最新の曲（{d} 以降に追加）をデータ節約音質で。スマホは Wi-Fi で同期します。'],
     'st.noTs': ['Tailscale isn’t installed on this Mac.', 'この Mac に Tailscale がありません。'], 'st.noPhone': ['No phone on your tailnet.', 'tailnet にスマホがありません。'],
     'set.lang': ['Language', '言語'], 'set.langSub': ['Interface text; library data stays as it is', 'インターフェースの表示。ライブラリのデータはそのまま'],
     'set.help': ['Help layer', 'ヘルプ表示'], 'set.helpSub': ['Hints and shortcuts on every screen (<kbd>ctrl</kbd>+<kbd>alt</kbd>+<kbd>⇧</kbd>+<kbd>D</kbd>)', '各画面のヒントとショートカット（<kbd>ctrl</kbd>+<kbd>alt</kbd>+<kbd>⇧</kbd>+<kbd>D</kbd>）'],

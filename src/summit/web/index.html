@@ -385,7 +385,10 @@ function streamHTML() {
     !p.online ? H.t('st.offline') : p.direct ? H.t('st.direct') : H.t('st.relay', { r: p.relay || '?' })}</b></div>`;
   const tsHTML = !ts.installed ? `<p class="hint">${H.t('st.noTs')}</p>` : ts.peers.length ? ts.peers.map(peer).join('') +
     (ts.peers.some(p => p.online && !p.direct) ? `<p class="hint errmsg">${H.t('st.relayHint')}</p>` : '') : `<p class="hint">${H.t('st.noPhone')}</p>`;
-  return `<div class="cov">${cov}</div>${job}<p class="hint">${H.t('st.hint')}</p>${logHTML(d.job)}
+  const off = d.offline, gb = b => (b / 1073741824).toFixed(1);
+  const offHTML = `<div class="count"><span>${H.t('st.offline2')}</span><b>${H.t('st.offlineN', { n: nf(off.tracks), g: gb(off.bytes), b: (off.budget_mb / 1024).toFixed(0) })}</b></div>
+    <p class="hint">${H.t('st.offlineHint', { d: off.oldest_added ? new Date(off.oldest_added * 1000).toLocaleDateString() : '—' })}</p>`;
+  return `<div class="cov">${cov}</div>${job}<p class="hint">${H.t('st.hint')}</p>${offHTML}${logHTML(d.job)}
     <details open><summary>${H.t('st.path')}</summary>${awake}<p class="hint">${H.t('st.awakeHint')}</p>${tsHTML}</details>`;
 }
 async function loadRb() {

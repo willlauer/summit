@@ -52,6 +52,8 @@ class Api(val http: OkHttpClient, var base: String) {
         putJsonArray("ids") { ids.forEach { add(it) } }; put("k", k); put("space", space)
     }))
     suspend fun like(id: String, liked: Boolean) { call("POST", "/api/likes", buildJsonObject { put("id", id); put("liked", liked) }) }
+    /** The offline set (server.offline_set): the newest tracks that fit in [budgetMb], data-saver quality. */
+    suspend fun offline(budgetMb: Int): OfflineSet = json.decodeFromString(call("GET", "/api/offline?budget_mb=$budgetMb", timeoutS = 60))
     suspend fun prefetch(ids: List<String>, q: String = "high") { call("POST", "/api/prefetch", buildJsonObject { putJsonArray("ids") { ids.forEach { add(it) } }; put("q", q) }) }
 
     suspend fun createPlaylist(name: String, ids: List<String>, folder: Int? = null): Created = json.decodeFromString(call("POST", "/api/playlists", buildJsonObject {

@@ -1,5 +1,6 @@
 package com.willlauer.summit.data
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 // Wire format of the Summit server (src/summit/server.py). Only what the phone uses; unknown keys are ignored.
@@ -60,3 +61,9 @@ data class Created(val id: Int, val version: Int = 1)
 
 @Serializable
 data class Conflict(val conflict: Boolean = true, val playlist: Playlist)
+
+@Serializable
+data class OfflineTrack(val id: String, val bytes: Long)
+
+@Serializable
+data class OfflineSet(@SerialName("budget_mb") val budgetMb: Int, val bytes: Long, val tracks: List<OfflineTrack>)
