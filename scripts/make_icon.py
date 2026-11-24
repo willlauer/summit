@@ -1,119 +1,126 @@
-"""Render Summit's icon: pixel art on a 32×32 grid, in the app's ice palette. A snowy peak under a bright star, with
-wind streaks blowing across (the same night sky, wind and constellation glints as the map).
+"""Render Summit's icon in the Ice Wire look: a neon-tube mountain peak (electric blue glow, ice-white core) under a
+four-point glint, inside a cut-corner frame like the app's buttons, with light rain over a near-black blue night.
 
-Writes the macOS icon (src/summit/assets/icon.png, 1024 px, used by `summit bundle` and the Dock), and the Android
-launcher layers (android/app/src/main/res/mipmap-xxxhdpi): the adaptive foreground and a monochrome silhouette for
-themed icons. Every grid cell scales by a whole number of pixels, so edges stay hard.
+Writes the macOS icon (src/summit/assets/icon.png, 1024 px, used by `summit bundle` and the Dock; Big Sur proportions:
+an 824 px rounded square with room around it), and the Android launcher layers (android/app/src/main/res/
+mipmap-xxxhdpi): the adaptive foreground and a monochrome silhouette for themed icons. Drawn 4x large and scaled down,
+so the tubes stay smooth.
 
 Run with: uv run --with pillow scripts/make_icon.py
 """
 
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 ROOT = Path(__file__).resolve().parent.parent
-N = 32
-H = lambda s: tuple(int(s[i:i + 2], 16) for i in (1, 3, 5))
-SKY_TOP, SKY = H("#0B1B30"), H("#050B14")
-OUT, SNOW, LIT, ICE, DEEP, GROUND = H("#02060C"), H("#F2FBFF"), H("#BFEFFF"), H("#7FDBFF"), H("#2F8FD8"), H("#16283F")
-AQUA, STAR = H("#7AF2DC"), H("#E3F6FF")
+SS = 4  # supersampling
+BG_TOP, BG_BOTTOM = (10, 22, 52), (3, 6, 15)
+SIGN, TUBE, WHITE, AQUA = (47, 123, 255), (216, 246, 255), (255, 255, 255), (111, 255, 224)
 
 
-def put(g, x, y, c):
-    if 0 <= x < N and 0 <= y < N:
-        g[y][x] = c
-
-
-def draw() -> list[list]:
-    """The scene as a grid of colours (None = empty, for the silhouette)."""
-    g = [[SKY_TOP if y < 13 or (y == 13 and x % 2 == 0) else SKY for x in range(N)] for y in range(N)]
-    # the peak: lit face left, shadow face right, a ridge line, a snow cap with a jagged edge, a dark outline
-    px, py, base, left, right, cap = 16, 11, 28, 1, 30, 6
-    for y in range(py, base + 1):
-        t = (y - py) / (base - py)
-        xl, xr = round(px - (px - left) * t), round(px + (right - px) * t)
-        for x in range(xl, xr + 1):
-            c = ICE if x == px else LIT if x < px else DEEP
-            if y - py < cap and abs(x - px) <= (y - py) * 0.9:
-                c = SNOW if x <= px else LIT
-            put(g, x, y, c)
-        put(g, xl - 1, y, OUT); put(g, xr + 1, y, OUT)
-    put(g, px, py - 1, OUT)
-    for k, x in enumerate(range(px - 6, px + 7)):
-        y = py + cap + (k % 3 == 0) - (k % 4 == 1)
-        put(g, x, y, SNOW if x <= px else LIT)
-    for y in range(base + 1, N):
-        for x in range(N):
-            put(g, x, y, GROUND)
-    # the star over the summit: a pixel glint
-    sx, sy = 16, 5
-    put(g, sx, sy, SNOW)
-    for d in (1, -1):
-        put(g, sx + d, sy, STAR); put(g, sx, sy + d, STAR)
-        put(g, sx + 2 * d, sy, AQUA); put(g, sx, sy + 2 * d, AQUA)
-    # wind: streaks with a bright head
-    for y, (x0, x1) in ((14, (2, 9)), (17, (22, 30)), (21, (0, 6))):
-        for x in range(x0, x1 + 1):
-            put(g, x, y, STAR)
-        put(g, x0, y, ICE)
-    put(g, 6, 3, STAR); put(g, 26, 6, STAR); put(g, 29, 2, AQUA)
-    return g
-
-
-def image(g, cell: int, mask: bool) -> Image.Image:
-    im = Image.new("RGBA", (N * cell, N * cell))
+def gradient(size: int) -> Image.Image:
+    im = Image.new("RGB", (size, size))
     d = ImageDraw.Draw(im)
-    for y in range(N):
-        for x in range(N):
-            d.rectangle([x * cell, y * cell, (x + 1) * cell - 1, (y + 1) * cell - 1], fill=g[y][x])
-    if mask:  # a rounded square, stepped on the same pixel grid
-        m = Image.new("L", (N * 8, N * 8), 0)
-        ImageDraw.Draw(m).rounded_rectangle([0, 0, N * 8 - 1, N * 8 - 1], radius=int(N * 8 * .22), fill=255)
-        im.putalpha(m.resize((N, N), Image.NEAREST).resize(im.size, Image.NEAREST))
-    return im
+    for y in range(size):
+        t = y / (size - 1)
+        d.line([(0, y), (size, y)], fill=tuple(round(a + (b - a) * t) for a, b in zip(BG_TOP, BG_BOTTOM)))
+    # street-light haze rising from the bottom
+    haze = Image.new("RGB", (size, size))
+    ImageDraw.Draw(haze).ellipse([-size * .3, size * .62, size * 1.3, size * 1.6], fill=(18, 52, 130))
+    return ImageChops.add(im, haze.filter(ImageFilter.GaussianBlur(size * .12)))
 
 
-def silhouette(g, cell: int) -> Image.Image:
-    """Themed icons: Android tints this alpha. The peak, the star and the wind; no sky."""
-    keep = {OUT, SNOW, LIT, ICE, DEEP, STAR, AQUA}
-    im = Image.new("RGBA", (N * cell, N * cell), (0, 0, 0, 0))
-    d = ImageDraw.Draw(im)
-    for y in range(N - 3):
-        for x in range(N):
-            if g[y][x] in keep and g[y][x] != OUT:
-                d.rectangle([x * cell, y * cell, (x + 1) * cell - 1, (y + 1) * cell - 1], fill=(255, 255, 255, 255))
-    return im
+def octagon(box, cut):
+    x0, y0, x1, y1 = box
+    return [(x0 + cut, y0), (x1 - cut, y0), (x1, y0 + cut), (x1, y1 - cut), (x1 - cut, y1), (x0 + cut, y1), (x0, y1 - cut), (x0, y0 + cut)]
 
 
-g = draw()
-mac = image(g, 32, mask=True)                       # 32 px per cell → 1024
+def shapes(s: float):
+    """The drawing in a unit square scaled to s: peak polyline, inner ridge, frame octagon, glint centre and size."""
+    k = lambda pts: [(x * s, y * s) for x, y in pts]
+    peak = k([(.17, .74), (.40, .40), (.50, .50), (.60, .30), (.83, .74)])
+    ridge = k([(.53, .41), (.60, .30), (.67, .41), (.62, .38), (.60, .42), (.57, .38), (.53, .41)])
+    frame = octagon((.11 * s, .11 * s, .89 * s, .89 * s), .09 * s)
+    return peak, ridge, frame, (.60 * s, .17 * s), .07 * s
+
+
+def tubes(size: int, rain: bool = True, frame_on: bool = True) -> Image.Image:
+    """The neon on transparent: a wide blue glow, a tighter glow, then the white-hot core."""
+    peak, ridge, frame, (gx, gy), gr = shapes(size)
+    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+
+    def layer(width, colour, blur, alpha=255):
+        im = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        d.line(peak, fill=colour + (alpha,), width=round(width), joint="curve")
+        if frame_on:
+            d.line(frame + frame[:1], fill=colour + (round(alpha * .6),), width=round(width * .5), joint="curve")
+        d.polygon(ridge, fill=colour + (round(alpha * .8),))
+        # the glint: a four-point star
+        w = gr * .22
+        d.polygon([(gx, gy - gr), (gx + w, gy - w), (gx + gr, gy), (gx + w, gy + w), (gx, gy + gr), (gx - w, gy + w), (gx - gr, gy), (gx - w, gy - w)],
+                  fill=colour + (alpha,))
+        return im.filter(ImageFilter.GaussianBlur(blur)) if blur else im
+
+    for width, colour, blur, alpha in ((size * .09, SIGN, size * .06, 255), (size * .06, SIGN, size * .03, 255),
+                                       (size * .034, SIGN, size * .01, 255), (size * .016, TUBE, size * .003, 255),
+                                       (size * .007, WHITE, 0, 255)):
+        out = Image.alpha_composite(out, layer(width, colour, blur, alpha))
+    # chromatic split on the peak, as on the app's titles
+    split = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    ImageDraw.Draw(split).line([(x - size * .006, y) for x, y in peak], fill=AQUA + (70,), width=round(size * .006))
+    out = Image.alpha_composite(split, out)
+    if rain:
+        r = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        d = ImageDraw.Draw(r)
+        for i, (x, y, ln) in enumerate([(.20, .12, .10), (.33, .52, .08), (.72, .55, .09), (.86, .20, .07), (.45, .78, .06), (.27, .30, .05), (.78, .80, .07)]):
+            d.line([(x * size, y * size), ((x - ln * .18) * size, (y + ln) * size)], fill=(200, 215, 255, 60 if i % 2 else 90), width=max(1, round(size * .003)))
+        out = Image.alpha_composite(r, out)
+    return out
+
+
+def icon(size: int) -> Image.Image:
+    big = size * SS
+    im = gradient(big).convert("RGBA")
+    im = Image.alpha_composite(im, tubes(big))
+    return im.resize((size, size), Image.LANCZOS)
+
+
+# macOS: an 824 px rounded square centred in 1024, with a soft shadow
+art = icon(824)
+mask = Image.new("L", (824 * SS, 824 * SS), 0)
+ImageDraw.Draw(mask).rounded_rectangle([0, 0, 824 * SS - 1, 824 * SS - 1], radius=185 * SS, fill=255)
+art.putalpha(mask.resize((824, 824), Image.LANCZOS))
+mac = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+shadow = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+ImageDraw.Draw(shadow).rounded_rectangle([100, 112, 924, 936], radius=185, fill=(0, 0, 0, 110))
+mac = Image.alpha_composite(mac, shadow.filter(ImageFilter.GaussianBlur(14)))
+mac.alpha_composite(art, (100, 100))
 out = ROOT / "src/summit/assets/icon.png"
 mac.save(out)
 print(out)
 
-# Android adaptive icon, 432 px (108 dp at xxxhdpi): the launcher shows the middle 72 dp and applies its own shape.
-# The scene fills that middle at 9 px per cell (288 px); the rest is sky, so any launcher crop still looks right.
+# Android adaptive icon, 432 px (108 dp at xxxhdpi): launchers show the middle ~72 dp in their own shape, so the art
+# sits in the middle 300 px and the night carries on to the edges.
 res = ROOT / "android/app/src/main/res/mipmap-xxxhdpi"
 res.mkdir(parents=True, exist_ok=True)
-# The 32-cell scene sits in a 48-cell canvas (9 px per cell); sky and ground carry on to the edges, so there's no seam.
-wide = [[SKY_TOP if y < 8 + 13 or (y == 8 + 13 and x % 2 == 0) else GROUND if y > 8 + 28 else SKY for x in range(48)] for y in range(48)]
-for y in range(N):
-    for x in range(N):
-        wide[y + 8][x + 8] = g[y][x]
-for y in range(8 + 14, 8 + 29):  # the wind and the sky either side of the peak continue outwards
-    for x in list(range(8)) + list(range(40, 48)):
-        wide[y][x] = SKY
-for y, (x0, x1) in ((8 + 17, (39, 47)), (8 + 21, (0, 7))):
-    for x in range(x0, x1 + 1):
-        wide[y][x] = STAR
-fg = Image.new("RGBA", (432, 432))
-fd = ImageDraw.Draw(fg)
-for y in range(48):
-    for x in range(48):
-        fd.rectangle([x * 9, y * 9, x * 9 + 8, y * 9 + 8], fill=wide[y][x])
-fg.save(res / "ic_launcher_foreground.png")
+big = 432 * SS
+fg = gradient(big).convert("RGBA")
+inner = tubes(330 * SS, frame_on=False)
+fg.alpha_composite(inner, ((big - inner.width) // 2, (big - inner.height) // 2))
+fg.resize((432, 432), Image.LANCZOS).save(res / "ic_launcher_foreground.png")
+# Themed icons: Android tints this alpha. The peak, ridge and glint, no frame or rain.
+peak, ridge, _, (gx, gy), gr = shapes(330 * SS)
+m = Image.new("L", (330 * SS, 330 * SS), 0)
+d = ImageDraw.Draw(m)
+d.line(peak, fill=255, width=round(330 * SS * .05), joint="curve")
+d.polygon(ridge, fill=255)
+w = gr * .22
+d.polygon([(gx, gy - gr), (gx + w, gy - w), (gx + gr, gy), (gx + w, gy + w), (gx, gy + gr), (gx - w, gy + w), (gx - gr, gy), (gx - w, gy - w)], fill=255)
 mono = Image.new("RGBA", (432, 432), (0, 0, 0, 0))
-mono.paste(silhouette(g, 9), (72, 72))
+white = Image.new("RGBA", (330, 330), (255, 255, 255, 255))
+white.putalpha(m.resize((330, 330), Image.LANCZOS))
+mono.alpha_composite(white, (51, 51))
 mono.save(res / "ic_launcher_monochrome.png")
 print(res)
