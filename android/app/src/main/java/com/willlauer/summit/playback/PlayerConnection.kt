@@ -122,7 +122,8 @@ class PlayerConnection(private val ctx: Context, private val repo: Repo, private
     private fun prefetchAhead() {
         val mc = c ?: return
         val ord = order(mc); val k = ord.indexOf(mc.currentMediaItemIndex)
-        repo.prefetch(ord.drop(k).take(4).map { mc.getMediaItemAt(it).mediaId })
+        val q = Streaming.quality.value.let { if (it == "auto") "low" else it }  // low is cheap to make; high is mostly ready
+        repo.prefetch(ord.drop(k).take(4).map { mc.getMediaItemAt(it).mediaId }, q)
     }
 
     // The queue survives the app being closed: restored paused, where it was.

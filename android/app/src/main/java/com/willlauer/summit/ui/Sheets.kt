@@ -193,9 +193,7 @@ private fun MapOptionsSheet() {
     val space by app.repo.space.collectAsStateWithLifecycle()
     val ui = LocalMapUi.current
     Column(Modifier.padding(horizontal = 24.dp)) {
-        Text("Look", style = MaterialTheme.typography.titleLarge)
-        Spacer(Modifier.height(10.dp))
-        LookPicker()
+        StreamingPicker()
         Spacer(Modifier.height(20.dp))
         Text("Map", style = MaterialTheme.typography.titleLarge)
         Spacer(Modifier.height(14.dp))
@@ -294,4 +292,20 @@ fun LookPicker() {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Looks.all.forEach { l -> Chip(l.label, LookState.current == l) { LookState.set(l); app.repo.lookKey = l.key } }
     }
+}
+
+/** Streaming quality (playback.Streaming): Auto (high on Wi-Fi, data saver on cellular), High, or Data saver. */
+@Composable
+fun StreamingPicker() {
+    val q by com.willlauer.summit.playback.Streaming.quality.collectAsStateWithLifecycle()
+    Text("Streaming", style = MaterialTheme.typography.titleLarge)
+    Spacer(Modifier.height(10.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        com.willlauer.summit.playback.Streaming.QUALITIES.forEach { (k, label) -> Chip(label, q == k) { com.willlauer.summit.playback.Streaming.setQuality(k) } }
+    }
+    Text(when (q) {
+        "high" -> "256k AAC or the original file, on every network."
+        "low" -> "128k AAC everywhere: a third of the data."
+        else -> "High quality on Wi-Fi, data saver (128k) on cellular."
+    } + " The next three tracks download ahead, so skips start instantly.", Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodySmall)
 }

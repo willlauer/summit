@@ -11,7 +11,7 @@
   .split { display: grid; grid-template-columns: var(--artists-w, 300px) 3px minmax(0, 1fr); flex: 1; min-height: 0; }
   .alist { overflow: auto; border-right: 1px solid var(--line); padding: 0 6px 20px; }
   .alist .row .n { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-  .alist .row.on { background: rgba(62, 230, 255, .1); box-shadow: inset 2px 0 0 var(--cyan); color: #fff; }
+  .alist .row.on { background: color-mix(in srgb, var(--cyan) 10%, transparent); box-shadow: inset 2px 0 0 var(--cyan); color: var(--hi); }
   .hero { display: flex; align-items: center; gap: 16px; padding: 18px 22px 14px; border-bottom: 1px solid var(--line); }
   .hero .cover { width: 72px; height: 72px; border-radius: var(--radius); }
   .hero h1 { font-size: 24px; }
@@ -178,6 +178,8 @@ main.addEventListener('click', async e => {
   H.player.play(+r.dataset.i, { queue: list(), label: label() });
 });
 main.addEventListener('dblclick', e => { const r = e.target.closest('tr[data-i]'); if (r && !e.target.closest('button, .artistlink')) H.dblGoTo(e, +r.dataset.i); });
+// ⌘/Ctrl- or Shift-click rows to pick several songs and add them to a playlist in one go.
+H.rowSelect(main, { order: () => (st.rendered && main.querySelector('tr[data-i]') ? st.rendered.L : []) });
 H.on('player', i => main.querySelectorAll('tr[data-i]').forEach(r => r.classList.toggle('playing', +r.dataset.i === i)));
 H.on('likes', () => { document.getElementById('nL').textContent = S.data.liked.length; if (st.tab === 'liked') render(); });
 H.on('lang', render);

@@ -5,7 +5,7 @@ import time
 
 import numpy as np
 
-from .config import DATA, DB_PATH, TAGS
+from .config import DATA, DB_PATH
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tracks (
@@ -121,25 +121,45 @@ def migrate(con: sqlite3.Connection) -> None:
         if "family" not in cols:
             con.execute(f"ALTER TABLE {table} ADD COLUMN family INTEGER")
             con.commit()
+    # Tag taxonomy (taxonomy.py): genres sit in a family. Known data: raw lookups per source (kept so the maps can
+    # change without refetching), and the evidence they give for each tag (file | discogs | lastfm | rule).
+    if "parent" not in {r[1] for r in con.execute("PRAGMA table_info(tags)")}:
+        con.execute("ALTER TABLE tags ADD COLUMN parent TEXT")
+        con.commit()
+    if not con.execute("SELECT 1 FROM sqlite_master WHERE name='ext_meta'").fetchone():
+        con.execute("CREATE TABLE ext_meta (track_id TEXT, source TEXT, data TEXT, fetched_at REAL, PRIMARY KEY (track_id, source))")
+        con.execute("CREATE TABLE tag_evidence (track_id TEXT, tag_id INTEGER, source TEXT, weight REAL, PRIMARY KEY (track_id, tag_id, source))")
+        con.commit()
+    # Release year from the file's tags (Era); NULL = not read yet, 0 = the file has none.
+    if "year" not in {r[1] for r in con.execute("PRAGMA table_info(tracks)")}:
+        con.execute("ALTER TABLE tracks ADD COLUMN year INTEGER")
+        con.commit()
 
 
 def seed_tags(con: sqlite3.Connection) -> None:
-    have = {(r[0], r[1], r[2]) for r in con.execute("SELECT category, name, prompt FROM tags")}
-    if all((c, n, p) in have for c, ts in TAGS.items() for n, p in ts.items()):
+    """Make the tags table match taxonomy.py. Tags from older vocabularies are dropped with their marks; user-made
+    Vibe tags are kept."""
+    from .taxonomy import rows
+
+    want = rows()
+    have = {tuple(r) for r in con.execute("SELECT category, name, prompt, parent FROM tags WHERE category != 'Vibe'")}
+    if have == set(want):
         return  # nothing to write; avoids taking a write lock on every connect
-    for cat, tags in TAGS.items():
-        for name, prompt in tags.items():
-            con.execute(
-                "INSERT INTO tags(category, name, prompt) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET prompt=excluded.prompt",
-                (cat, name, prompt),
-            )
+    names = {w[1] for w in want}
+    stale = [r[0] for r in con.execute("SELECT id, name FROM tags WHERE category != 'Vibe'") if r[1] not in names]
+    for table in ("track_tags", "tag_evidence"):
+        con.executemany(f"DELETE FROM {table} WHERE tag_id=?", [(i,) for i in stale])
+    con.executemany("DELETE FROM tags WHERE id=?", [(i,) for i in stale])
+    con.executemany(
+        "INSERT INTO tags(category, name, prompt, parent) VALUES (?,?,?,?) "
+        "ON CONFLICT(name) DO UPDATE SET category=excluded.category, prompt=excluded.prompt, parent=excluded.parent", want)
     con.commit()
 
 
 def purge(con: sqlite3.Connection, ids: list[str]) -> None:
     """Remove tracks and everything derived from them."""
     for table, col in (("vectors", "track_id"), ("clap_windows", "track_id"), ("layouts", "track_id"), ("layouts3d", "track_id"),
-                       ("track_tags", "track_id"), ("playlist_tracks", "track_id"), ("likes", "track_id"), ("failures", "track_id"), ("rb_tracks", "track_id"), ("plays", "track_id"),
+                       ("track_tags", "track_id"), ("tag_evidence", "track_id"), ("ext_meta", "track_id"), ("playlist_tracks", "track_id"), ("likes", "track_id"), ("failures", "track_id"), ("rb_tracks", "track_id"), ("plays", "track_id"),
                        ("tracks", "id")):
         con.executemany(f"DELETE FROM {table} WHERE {col}=?", [(i,) for i in ids])
 

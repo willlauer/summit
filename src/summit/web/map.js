@@ -200,7 +200,8 @@
     const acts = opts.suggested
       ? `<button data-act="accept" data-tag="${H.esc(tag)}" data-i="${opts.i}" title="Confirm">✓</button><button data-act="reject" data-tag="${H.esc(tag)}" data-i="${opts.i}" title="Reject">✕</button>`
       : opts.removable ? `<button data-act="remove" data-tag="${H.esc(tag)}" data-i="${opts.i}" title="Remove">×</button>` : '';
-    return `<span class="chip${opts.suggested ? ' sugg' : ''}" style="--c:${c}"><i></i>${H.esc(tag)}${score}${acts}</span>`;
+    const auto = opts.auto ? `<span class="auto" title="${H.esc(H.t('src.known'))}">${H.esc(H.t('askAuto'))}</span>` : '';  // confirmed by known data
+    return `<span class="chip${opts.suggested ? ' sugg' : ''}" style="--c:${c}"><i></i>${H.esc(tag)}${score}${auto}${acts}</span>`;
   }
 
   // Frames forward global shortcuts to the host; help layer follows the host; hearts toggle likes everywhere.

@@ -11,7 +11,6 @@ membership overlap).
 import numpy as np
 
 from . import db
-from .similar import prep, unit
 from .config import MAX_DURATION, SEED, SPACES, UMAP_NEIGHBORS
 
 MIN_SHARE = 1 / 80  # smallest sub-cluster worth showing, as a share of the library (~48 of 3,860 tracks)
@@ -23,6 +22,10 @@ def load(con, kind: str, ids: list[str]) -> np.ndarray:
     return np.stack([vecs[i] for i in ids])
 
 
+def unit(X: np.ndarray) -> np.ndarray:
+    return X / np.linalg.norm(X, axis=1, keepdims=True).clip(1e-9)
+
+
 def analyzed_ids(con) -> list[str]:
     return [r[0] for r in con.execute(
         "SELECT t.id FROM tracks t JOIN vectors v ON v.track_id=t.id AND v.kind='clap' WHERE t.missing=0 AND t.duration <= ? ORDER BY t.id",
@@ -30,9 +33,8 @@ def analyzed_ids(con) -> list[str]:
 
 
 def space_matrix(con, space: str, ids: list[str]) -> np.ndarray:
-    """Each kind centred and partially whitened (see similar.py), weighted equally, so the space is unit length."""
     kinds = SPACES[space]["kinds"]
-    return np.hstack([prep(load(con, k, ids), k) for k in kinds]) / np.sqrt(len(kinds))
+    return np.hstack([unit(load(con, k, ids)) for k in kinds]) / np.sqrt(len(kinds))
 
 
 def _umap(X: np.ndarray, dims: int, min_dist: float) -> np.ndarray:

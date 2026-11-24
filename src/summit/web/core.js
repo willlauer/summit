@@ -1,18 +1,14 @@
 // Summit host (index.html): library data, player, shared state (space / colour / search), API calls,
 // global shortcuts and the help layer. Mode pages run in iframes and reach this as window.parent.Summit.
 (function () {
-  // Looks: the whole app's style, switchable (the phone has the same two: android/…/ui/Theme.kt). Each sets the
-  // cluster palette and how maps draw; the rest is CSS (:root[data-look] in shared.css).
+  // The look is Ice Wire (shared.css, the end). LOOKS keeps the shape other code reads (palette for cluster colours,
+  // and how maps draw: smooth round stars, no drawn sky). The phone's looks are android/…/ui/Theme.kt.
   const LOOKS = {
-    classic: { label: 'Classic', pixel: false, wind: false,
-      palette: ['#00f0ff', '#ff2a6d', '#05ffa1', '#b026ff', '#ff9a3d', '#5aa9ff', '#fcee0a', '#f45bff',
-                '#3dffc5', '#ff5c5c', '#a8ff3d', '#ffb3d9', '#7d7dff', '#e2b45a', '#40c4aa', '#c9a6ff'] },
-    pixel: { label: 'Pixel', pixel: true, wind: true, top: '#071019', bottom: '#03070d',
-      palette: ['#7fdbff', '#4fa8ff', '#a9b8ff', '#7af2dc', '#c5a8ff', '#3fd0e0', '#e3f6ff', '#6f8cff',
-                '#9ffff0', '#5cc8ff', '#b4e2ff', '#8f7dff', '#49e3b8', '#d6c8ff', '#66b2d9', '#2fb8ff'] },
+    icewire: { label: 'Ice Wire', pixel: false, wind: false,
+      palette: ['#2f7bff', '#7cc8ff', '#6fffe0', '#a48bff', '#d8f6ff', '#38b6ff', '#5ce1e6', '#6e8bff',
+                '#9fe8ff', '#4f6dff', '#3dffc0', '#c6d8ff', '#00d2ff', '#8ef0ff', '#7a7dff', '#b8f2ff'] },
   };
-  let look = 'classic';
-  try { look = LOOKS[localStorage.getItem('summit.look')] ? localStorage.getItem('summit.look') : 'classic'; } catch (e) {}
+  const look = 'icewire';
   const PALETTE = LOOKS[look].palette.slice();  // cluster data only; swapped in place when the look changes
   const UI = { focus: '#ffffff', selected: '#ffd84d', confirmed: '#3dffb0', suggested: '#8b8fa4', untagged: '#2a3344', danger: '#ff4d8d' };
 
@@ -27,7 +23,7 @@
   // Map labels: genres (families) and subgenres (sub-clusters) toggle independently. Both on = follow zoom.
   H.labelShow = { fam: true, sub: true };
   try { Object.assign(H.labelShow, JSON.parse(localStorage.getItem('summit.labels') || '{}')); } catch (e) {}
-  // Map in 3D (the galaxy view): every map except Flow's follows it.
+  // Map in 3D (the galaxy view): every map follows it.
   try { H.view3d = localStorage.getItem('summit.3d') === '1'; } catch (e) {}
   H.set3D = on => { H.view3d = on; try { localStorage.setItem('summit.3d', on ? '1' : ''); } catch (e) {} H.emit('3d', on); };
   H.setLabels = show => { H.labelShow = show; try { localStorage.setItem('summit.labels', JSON.stringify(show)); } catch (e) {} H.emit('labels', show); };
@@ -83,17 +79,8 @@
     return shades;
   };
   H.leafColor = c => palette().leaf[c] || PALETTE[0];
-  H.lookStyle = () => { const l = LOOKS[H.look]; return { pixel: l.pixel, wind: l.wind, top: l.top, bottom: l.bottom }; };
-  H.applyLook = doc => { if (doc && doc.documentElement) doc.documentElement.dataset.look = H.look; };
-  H.setLook = k => {
-    if (!LOOKS[k]) return;
-    H.look = k;
-    try { localStorage.setItem('summit.look', k); } catch (e) {}
-    PALETTE.splice(0, PALETTE.length, ...LOOKS[k].palette); shades = null;
-    H.applyLook(document);
-    document.querySelectorAll('iframe').forEach(f => { try { H.applyLook(f.contentDocument); } catch (e) {} });
-    H.emit('look', k);
-  };
+  H.lookStyle = () => ({ pixel: false, wind: false, fx: 0 });
+  H.applyLook = doc => { if (doc && doc.documentElement) doc.documentElement.dataset.look = look; };
   H.applyLook(document);
   H.familyHue = f => PALETTE[f % PALETTE.length];  // "Family" colour mode: one distinct colour per family
   H.familyColor = f => palette().family[f] || PALETTE[0];
@@ -125,6 +112,7 @@
   H.setSimilarN = n => { H.similarN = n; try { localStorage.setItem('summit.similarN', n); } catch (e) {} };
   H.find = q => api(`/api/search?q=${encodeURIComponent(q)}&n=25`);
   const nbCache = {};
+  H.clearNeighbors = () => { for (const k in nbCache) delete nbCache[k]; };  // after a retrain: similar tracks follow your teaching
   H.neighbors = async (i, k = 10) => {
     const key = `${H.space}:${i}:${k}`;
     return nbCache[key] || (nbCache[key] = api(`/api/neighbors?i=${i}&k=${k}&space=${H.space}`));
@@ -237,7 +225,7 @@
   };
   H.playlistLabel = p => { const path = p.folder ? H.folderPath(p.folder) : ''; return path ? `${path} › ${p.name}` : p.name; };
   // "Add to playlist" menu, drawn in whichever document the button lives in (the host or a mode frame).
-  // Flows are playlists too, but their tracks come from the route, so they aren't offered here.
+  // Old saved flows (kind 'flow') aren't offered here.
   H.playlistMenu = (anchor, idxs) => {
     const doc = anchor.ownerDocument, old = doc.getElementById('plmenu');
     if (old) { old.close(); if (old.anchor === anchor) return; }
@@ -303,6 +291,65 @@
       try { resolve((await H.createPlaylist(n, [])).id); } catch (err) { H.toast(err.message); resolve(null); }
     };
   });
+
+  // ---- multi-select in track tables ----
+  // ⌘/Ctrl-click toggles a row, Shift-click extends from the last one, ⌘/Ctrl-A selects every row, Esc clears; a plain
+  // click still plays (and drops the selection). While anything is selected a bar offers Add to playlist, plus whatever
+  // the page adds (e.g. Remove). order() is the table's track indices in display order, including rows not drawn yet,
+  // so ranges and select-all cover long lazily-drawn lists; selected tracks that leave the table are dropped.
+  H.rowSelect = (root, { order, actions = () => [] }) => {
+    const doc = root.ownerDocument, sel = new Set();
+    let anchor = null;
+    const bar = doc.createElement('div');
+    bar.className = 'selbar'; bar.hidden = true; doc.body.appendChild(bar);
+    const picked = () => order().filter(j => sel.has(j));
+    const paint = () => {
+      const live = new Set(order());
+      for (const j of [...sel]) if (!live.has(j)) sel.delete(j);
+      root.querySelectorAll('tr[data-i]').forEach(r => r.classList.toggle('selected', sel.has(+r.dataset.i)));
+      bar.hidden = !sel.size;
+      doc.body.classList.toggle('has-sel', sel.size > 0);  // room to scroll the last rows out from under the bar
+      if (!sel.size) { anchor = null; return; }
+      const extra = actions();
+      bar.innerHTML = `<b>${H.t('nSelected', { n: sel.size })}</b><button class="primary small" data-sa="addpl">${H.t('addToPl')}</button>`
+        + extra.map((a, k) => `<button class="small${a.danger ? ' danger' : ''}" data-sa="${k}">${H.esc(a.label)}</button>`).join('')
+        + `<button class="small ghost" data-sa="clear" title="Esc">${H.t('clearSel')}</button>`;
+      bar.extra = extra;
+    };
+    const clear = () => { sel.clear(); paint(); };
+    root.addEventListener('mousedown', e => { if (e.shiftKey && e.target.closest('tr[data-i]')) e.preventDefault(); });  // no text highlight
+    root.addEventListener('click', e => {
+      const r = e.target.closest('tr[data-i]');
+      if (!r || e.target.closest('button, a, input')) return;
+      const j = +r.dataset.i;
+      if (e.shiftKey && anchor != null) {
+        const o = order(), a = o.indexOf(anchor), b = o.indexOf(j);
+        if (a < 0 || b < 0) return;
+        if (!(e.metaKey || e.ctrlKey)) sel.clear();
+        o.slice(Math.min(a, b), Math.max(a, b) + 1).forEach(x => sel.add(x));
+      } else if (e.metaKey || e.ctrlKey || e.shiftKey) {
+        sel.has(j) ? sel.delete(j) : sel.add(j); anchor = j;
+      } else { if (sel.size) clear(); return; }  // a plain click plays, as before
+      e.stopImmediatePropagation(); e.preventDefault(); paint();
+    }, true);
+    doc.addEventListener('keydown', e => {
+      if (e.target.closest && e.target.closest('input, select, textarea, [contenteditable]')) return;
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a' && root.querySelector('tr[data-i]')) {
+        e.preventDefault(); order().forEach(j => sel.add(j)); paint();
+      } else if (e.key === 'Escape' && sel.size) clear();
+    });
+    bar.addEventListener('click', async e => {
+      const b = e.target.closest('[data-sa]'); if (!b) return;
+      const s = b.dataset.sa, idxs = picked();
+      if (s === 'clear') return clear();
+      if (s === 'addpl') return H.playlistMenu(b, idxs);
+      try { await bar.extra[+s].run(idxs); clear(); } catch (err) { H.toast(err.message); }
+    });
+    new MutationObserver(paint).observe(root, { childList: true, subtree: true });  // re-renders and lazily added rows
+    const api = { has: j => sel.has(j), size: () => sel.size, picked, clear, paint };
+    doc._summitSel = api;  // the right-click menu acts on the whole selection when you right-click inside it
+    return api;
+  };
 
   // ---- library updates: files not on the map yet, and the `summit update` run that adds them ----
   H.pending = () => api('/api/pending');
@@ -575,7 +622,10 @@
       m.close();
       const a = b.dataset.ctx;
       if (a === 'similar') H.open('search', 'similar', i);
-      if (a === 'addpl') H.playlistMenu({ ownerDocument: doc, getBoundingClientRect: () => ({ left: x, right: x, top: y, bottom: y }), contains: () => false }, [i]);
+      if (a === 'addpl') {
+        const s = doc._summitSel, group = s && s.has(i) && s.size() > 1 ? s.picked() : [i];
+        H.playlistMenu({ ownerDocument: doc, getBoundingClientRect: () => ({ left: x, right: x, top: y, bottom: y }), contains: () => false }, group);
+      }
       if (a === 'play') player.play(i);
       if (a === 'map') H.goTo(i);
       if (a === 'tree') H.explore(i);
@@ -584,7 +634,18 @@
   document.addEventListener('contextmenu', e => H.trackMenu(e));
 
   // ---- help layer + global keys (frames forward their keydowns here) ----
-  H.applyHelp = doc => doc.body && doc.body.classList.toggle('show-help', H.help);
+  // Help hints float over the UI, so each gets a × that turns the help layer off (back on: Settings or ctrl+alt+shift+D).
+  H.applyHelp = doc => {
+    if (!doc || !doc.body) return;
+    doc.body.classList.toggle('show-help', H.help);
+    doc.querySelectorAll('.help').forEach(el => {
+      if (!el.querySelector(':scope > .helpx')) el.insertAdjacentHTML('beforeend', `<button class="helpx" title="${H.esc(H.t('helpHide'))}">×</button>`);
+    });
+    if (!doc.__helpx) {
+      doc.__helpx = true;
+      doc.addEventListener('click', e => { if (e.target.closest('.helpx')) { e.preventDefault(); e.stopPropagation(); H.setHelp(false); H.toast(H.t('helpOff')); } }, true);
+    }
+  };
   H.setHelp = on => {
     H.help = on;
     try { localStorage.setItem('summit.help', on ? '1' : ''); } catch (e) {}

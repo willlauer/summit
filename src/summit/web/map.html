@@ -13,6 +13,19 @@
   .panel { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); }
   .panel .tabs { padding: 0 10px; border-bottom: 1px solid var(--line); }
   .body { padding: 14px 16px; overflow: auto; flex: 1; }
+  /* The side panel can be collapsed (the chevron), remembered; on narrow screens it sits under the map. */
+  .panel .tabs { display: flex; align-items: center; }
+  #panelTog { margin-left: auto; padding: 2px 8px; }
+  body.nopanel { grid-template-columns: minmax(0, 1fr) 0 36px; }  /* fixed: auto collapses to 0 and hides the toggle */
+  body.nopanel #splitPanel, body.nopanel .panel .body, body.nopanel .panel .tabs > :not(#panelTog) { display: none; }
+  body.nopanel .panel .tabs { padding: 6px 4px; border: 0; }
+  @media (max-width: 760px) {
+    body, body.nopanel { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) var(--panel-h, 42%); }
+    body.nopanel { grid-template-rows: minmax(0, 1fr) 38px; }
+    #splitPanel { display: none; }
+    .panel { border-left: 0; border-top: 1px solid var(--line); }
+    .note { left: 8px; right: 8px; bottom: 8px; max-width: none; }
+  }
   .note { position: absolute; left: 16px; bottom: 16px; max-width: 320px; padding: 12px 14px; z-index: 5; font-size: 12px; color: var(--muted); }
 </style>
 </head>
@@ -23,6 +36,7 @@
   <div class="tabs" id="tabs">
     <button data-v="track" class="on"><span data-i18n="tab.track">Track</span></button>
     <button data-v="selection"><span data-i18n="tab.selection">Selection</span> <span class="n" id="selN">0</span></button>
+    <button id="panelTog" class="small ghost" data-i18n-title="panelTip"></button>
   </div>
   <div class="body" id="body"></div>
 </aside>
@@ -173,7 +187,15 @@ body.addEventListener('focusout', async e => {
   if (f != null) { await H.renameFamily(+f, name); S.toast(t_('familyRenamed')); } else { await H.renameCluster(+c, name); S.toast(t_('groupRenamed')); }
 });
 body.addEventListener('keydown', e => { if ((e.target.dataset.c != null || e.target.dataset.f != null) && e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
-document.getElementById('tabs').onclick = e => { const b = e.target.closest('button'); if (b && b.dataset.v !== st.tab) { H.navPush(); setTab(b.dataset.v); } };
+// Side panel: collapsible, remembered (body.nopanel).
+(() => {
+  const tog = document.getElementById('panelTog');
+  const set = on => { document.body.classList.toggle('nopanel', on); tog.textContent = on ? '‹' : '›'; window.dispatchEvent(new Event('resize')); };
+  let v; try { v = localStorage.getItem('summit.map.nopanel'); } catch (e) {}
+  set(v === '1');
+  tog.onclick = () => { const on = !document.body.classList.contains('nopanel'); set(on); try { localStorage.setItem('summit.map.nopanel', on ? '1' : '0'); } catch (e) {} };
+})();
+document.getElementById('tabs').onclick = e => { const b = e.target.closest('button[data-v]'); if (b && b.dataset.v !== st.tab) { H.navPush(); setTab(b.dataset.v); } };
 body.addEventListener('dblclick', e => { const r = e.target.closest('.row[data-i]'); if (r && !e.target.closest('button')) H.dblGoTo(e, +r.dataset.i); });
 
 // Reorder an editable playlist by dragging its rows.

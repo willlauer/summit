@@ -15,8 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from . import clap_text, db, rekordbox
 from .config import DEFAULT_SPACE, MAX_DURATION, ROOT, SPACES, TAG_SPACE, WEB
 from .export import export_all
-from .layout import load, space_matrix
-from .similar import hubness, ranked, unit
+from .layout import load, space_matrix, unit
 from .media import TYPES, Prefetch, art_file, stream_file
 from .pipeline import Job
 from .scan import pending
@@ -44,6 +43,7 @@ class Library:
             self.ids = [i for i in ids if i in laid] if laid else ids
             self.idx = {i: k for k, i in enumerate(self.ids)}
             self.rows = {r["id"]: dict(r) for r in con.execute("SELECT * FROM tracks")}
+            self.cats = {r[0]: r[1] for r in con.execute("SELECT name, category FROM tags")}
             self.load_rekordbox()
             if not self.ids:
                 self.C = self.X = np.zeros((0, 1))
@@ -51,7 +51,6 @@ class Library:
                 return
             self.C = unit(load(con, "clap", self.ids))  # text search lives in CLAP space
             self.M = {s: space_matrix(con, s, self.ids) for s in SPACES}
-            self.R = {s: hubness(M) for s, M in self.M.items()}  # for hubness-corrected neighbour ranking
             self.X = self.M[TAG_SPACE]
             names = [n.split("---")[-1] for n in style_names()]
             S = load(con, "styles", self.ids)
@@ -67,6 +66,14 @@ class Library:
                 a = json.loads(r["attrs"])
                 self.rb[r["track_id"]] = {"bpm": float(a.get("AverageBpm") or 0)}
 
+    def category_tags(self) -> dict[str, list[str]]:
+        from .taxonomy import AXES
+
+        out = {}
+        for r in self.con.execute("SELECT name, category FROM tags ORDER BY id"):
+            out.setdefault(r[1], []).append(r[0])
+        return {c: out.get(c, []) for c in AXES}
+
     def tag_names(self) -> list[str]:
         return [r[0] for r in self.con.execute("SELECT name FROM tags ORDER BY id")]
 
@@ -78,6 +85,10 @@ class Library:
         return np.array(pos, dtype=int), np.array(neg, dtype=int)
 
     def score(self, tag: str) -> np.ndarray:
+        from .taxonomy import RULE_ONLY
+
+        if self.cats.get(tag) in RULE_ONLY:  # edit type comes from the title only: nothing to predict
+            return np.zeros(len(self.ids))
         pos, neg = self.marks(tag)
         if len(pos) >= MIN_TRAIN:
             return trained(self.X, pos, neg)
@@ -94,8 +105,11 @@ class Library:
         with self.lock:
             con = self.con
             tags = {}
-            for r in con.execute("SELECT g.name, tt.track_id, tt.status FROM track_tags tt JOIN tags g ON g.id=tt.tag_id"):
-                tags.setdefault(r["track_id"], {"confirmed": [], "rejected": []})[r["status"]].append(r["name"])
+            for r in con.execute("SELECT g.name, tt.track_id, tt.status, tt.source FROM track_tags tt JOIN tags g ON g.id=tt.tag_id"):
+                t = tags.setdefault(r["track_id"], {"confirmed": [], "rejected": [], "auto": []})
+                t[r["status"]].append(r["name"])
+                if r["status"] == "confirmed" and r["source"] != "user":
+                    t["auto"].append(r["name"])  # confirmed by known data (file / Discogs / Last.fm), not by you
             liked = [r[0] for r in con.execute("SELECT track_id FROM likes ORDER BY created_at DESC")]
             liked_set = set(liked)
             tracks = []
@@ -107,7 +121,7 @@ class Library:
                     "ext": r["format"], "bpm": round(rbpm) if rbpm else round(r["bpm"]) if r["bpm"] else None,
                     "key": r["key"], "audition": r["audition"] or 0,
                     "liked": i in liked_set, "added": round(r["added_at"] or 0),
-                    **({} if lite else {"styles": self.styles[k], **tags.get(i, {"confirmed": [], "rejected": []})}),
+                    **({} if lite else {"styles": self.styles[k], **tags.get(i, {"confirmed": [], "rejected": [], "auto": []})}),
                 })
             spaces, clusters, families = {}, {}, {}
             group = lambda r, key: {"id": r[key], "label": r["label"], "src": r["label_source"],
@@ -128,7 +142,7 @@ class Library:
             return {
                 "tracks": tracks, "spaces": spaces, "clusters": clusters, "families": families,
                 "spaceList": [{"key": k, "label": v["label"]} for k, v in SPACES.items() if k in spaces], "defaultSpace": DEFAULT_SPACE,
-                "tags": [dict(r) for r in con.execute("SELECT name, category FROM tags ORDER BY id")],
+                "tags": [dict(r) for r in con.execute("SELECT name, category, parent FROM tags ORDER BY id")],
                 "scores": {} if lite else {t: np.round(v, 2).tolist() for t, v in self.scores.items()},
                 "playlists": self.playlists(), "folders": self.folders(), "liked": [i for i in liked if i in self.idx],
                 "rekordbox": rekordbox.status(con),
@@ -159,7 +173,14 @@ def git_version() -> str:
 VERSION = git_version()
 app = FastAPI(title="Summit")
 lib: Library | None = None
-job = Job(on_done=lambda: lib.reload())
+def _after_update() -> None:
+    lib.reload()
+    stream_job.start()  # new tracks get their phone copies right away
+
+
+job = Job(on_done=_after_update)
+stream_job = Job(on_done=lambda: None, args=("transcode",), first_stage="stream")  # Tools › Phone streaming
+tag_job = Job(on_done=lambda: lib.reload(), args=("tags", "update"), first_stage="discogs")  # Tools › Tags
 prefetch = Prefetch()
 
 
@@ -216,8 +237,18 @@ async def revalidate(request: Request, call_next):
 @app.on_event("startup")
 def _startup() -> None:
     global lib
+    from . import rbguard
+
+    rbguard.install()  # nothing in this process may write into rekordbox's folders except through rbguard
     lib = Library()
     clap_text.warm()
+    from . import streaming
+    from .media import coverage
+
+    streaming.apply()  # keep the Mac awake while serving, if on
+    c = coverage(lib.con)
+    if any(v["ready"] < v["total"] for v in c.values()):
+        stream_job.start()  # finish the phone copies in the background
 
 
 @app.get("/")
@@ -244,22 +275,23 @@ def audio(track_id: str):
 
 
 @app.get("/stream/{track_id}")
-def stream(track_id: str):
-    """Phone audio: lossless files transcoded to AAC once (a couple of seconds the first time), others as they are."""
+def stream(track_id: str, q: str = "high"):
+    """Phone audio (media.py): q=high (lossless as 256k AAC, lossy as is) or q=low (128k AAC). Normally made ahead of
+    time; a track that isn't ready yet is converted now (a couple of seconds)."""
     r = lib.rows.get(track_id)
     if not r:
         raise HTTPException(404)
     try:
-        path, media = stream_file(r)
+        path, media = stream_file(r, q)
     except Exception as e:
         raise HTTPException(500, f"transcode failed: {e}")
     return FileResponse(path, media_type=media)
 
 
 @app.post("/api/prefetch")
-def prefetch_tracks(ids: list[str] = Body(..., embed=True)):
+def prefetch_tracks(ids: list[str] = Body(...), q: str = Body("high")):
     """Transcode these (the next tracks in a queue) in the background."""
-    prefetch.add([lib.rows[i] for i in ids[:20] if i in lib.rows])
+    prefetch.add([lib.rows[i] for i in ids[:20] if i in lib.rows], q if q in ("high", "low") else "high")
     return {"ok": True}
 
 
@@ -272,9 +304,37 @@ def art(track_id: str, s: int = 256):
     return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=604800"})
 
 
+def match_tags(q: str) -> tuple[list[str], str]:
+    """Tags named in a query (longest phrase first, whole words), and the text left over."""
+    import re
+
+    from .taxonomy import search_phrases
+
+    rest, found = f" {q.lower()} ", []
+    for phrase, tag in sorted(search_phrases().items(), key=lambda kv: -len(kv[0])):
+        pat = re.compile(rf"(?<![\w&-]){re.escape(phrase)}(?![\w&-])")
+        if pat.search(rest):
+            rest = pat.sub(" ", rest)
+            if tag not in found:
+                found.append(tag)
+    return found, " ".join(rest.split())
+
+
+def tag_match_scores(tags: list[str]) -> np.ndarray:
+    """How well each track fits all of the tags: confirmed = 1, rejected = 0, else its score; the weakest tag counts."""
+    cols = []
+    for t in tags:
+        s = lib.scores.get(t, np.zeros(len(lib.ids))).copy()
+        pos, neg = lib.marks(t)
+        s[pos], s[neg] = 1.0, 0.0
+        cols.append(s)
+    return np.min(cols, axis=0)
+
+
 @app.get("/api/search")
 def search(q: str, n: int = 60, mode: str = "both"):
-    """mode: both (name matches first, then by sound) | vibe (by sound only) | name (title / artist matches only)."""
+    """mode: both (name matches first, then by sound) | vibe (by sound only) | name (title / artist matches only).
+    Tags named in the query (taxonomy.search_phrases) lift tracks that have them; each result lists them."""
     q = q.strip()
     n = max(1, min(n, 2000))
     if not q or not lib.ids:
@@ -283,22 +343,33 @@ def search(q: str, n: int = 60, mode: str = "both"):
     hits = [k for k, i in enumerate(lib.ids) if ql in f"{lib.rows[i]['artist']} {lib.rows[i]['title']}".lower()]
     if mode == "name" or not clap_text.ready():
         return [{"i": k, "score": 1.0} for k in hits[:n]]
-    sims = lib.C @ clap_text.embed([q], cache=False)[0]
+    tags, rest = match_tags(q)
+    sims = lib.C @ clap_text.embed([rest or q], cache=False)[0]
+    if tags:
+        sims = sims + 0.6 * tag_match_scores(tags)  # CLAP similarities span ~0.3, so a confirmed tag leads
     if mode != "vibe":
         sims[hits] += 1.0  # name matches first
     top = np.argsort(-sims)[:n]
     lo, hi = float(sims[top[-1]]), float(sims[top[0]])
-    return [{"i": int(k), "score": round((float(sims[k]) - lo) / max(hi - lo, 1e-6), 3)} for k in top]
+    return [{"i": int(k), "score": round((float(sims[k]) - lo) / max(hi - lo, 1e-6), 3), **({"tags": tags} if tags else {})} for k in top]
+
+
+@app.get("/api/search/tags")
+def search_tags(q: str):
+    """Which tags a query names (the Search page shows them), and how many tracks have them confirmed / likely."""
+    tags, rest = match_tags(q.strip())
+    if not tags or not lib.ids:
+        return {"tags": tags, "rest": rest, "confirmed": 0, "likely": 0}
+    s = tag_match_scores(tags)
+    return {"tags": tags, "rest": rest, "confirmed": int((s >= 1.0).sum()), "likely": int(((s >= 0.6) & (s < 1.0)).sum())}
 
 
 @app.get("/api/neighbors")
 def neighbors(i: int, k: int = 10, space: str = "combined"):
     """Most similar tracks by cosine in the full embedding space (not 2D map distance)."""
-    if space not in lib.M:
-        space = TAG_SPACE
-    M = lib.M[space]
-    sims = ranked(M, lib.R[space], M[i])
-    sims[i] = -np.inf
+    M = lib.M.get(space, lib.X)
+    sims = M @ M[i]
+    sims[i] = -2
     return [int(j) for j in np.argsort(-sims)[:k]]
 
 
@@ -383,14 +454,12 @@ def discover(space: str = Body(DEFAULT_SPACE), n: int = Body(20), exclude: list[
 @app.post("/api/suggest")
 def suggest(ids: list[str] = Body(...), k: int = Body(20), space: str = Body("combined")):
     """Tracks that fit a set (a playlist): nearest to the mean of its tracks, excluding the set itself."""
-    if space not in lib.M:
-        space = TAG_SPACE
-    M = lib.M[space]
+    M = lib.M.get(space, lib.X)
     rows = [lib.idx[i] for i in ids if i in lib.idx]
     if not rows:
         return []
-    sims = ranked(M, lib.R[space], unit(M[rows].mean(0, keepdims=True))[0])
-    sims[rows] = -np.inf
+    sims = M @ unit(M[rows].mean(0, keepdims=True))[0]
+    sims[rows] = -2
     return [int(j) for j in np.argsort(-sims)[:k]]
 
 
@@ -411,6 +480,60 @@ def set_tags(ids: list[str] = Body(...), tag: str = Body(...), status: str = Bod
         lib.scores[tag] = lib.score(tag)
         pos, _ = lib.marks(tag)
     return {"tag": tag, "trained": len(pos) >= MIN_TRAIN, "scores": np.round(lib.scores[tag], 2).tolist()}
+
+
+@app.get("/api/tags/info")
+def tags_info():
+    """Settings › Tags: keys present, lookup coverage, confirmed tags per axis by source, and the lookup job."""
+    from . import known
+
+    return known.info(lib.con) | {"job": tag_job.state()}
+
+
+@app.post("/api/tags/keys")
+def tags_keys(discogs: str | None = Body(None), lastfm: str | None = Body(None)):
+    """Save API keys to data/keys.json ("" removes one) and test the ones given. Keys are never sent back."""
+    from . import known
+
+    return known.save_keys({"discogs": discogs, "lastfm": lastfm})
+
+
+@app.post("/api/tags/run")
+def tags_run():
+    tag_job.start()
+    return tag_job.state()
+
+
+@app.delete("/api/tags/run")
+def tags_stop():
+    tag_job.stop()
+    return tag_job.state()
+
+
+@app.post("/api/tags/resolve")
+def tags_resolve():
+    """Re-run tagging from what's already looked up (seconds), e.g. after the taxonomy maps change."""
+    from . import known
+
+    stats = known.resolve(log=lambda *_: None)
+    lib.reload()
+    return stats
+
+
+@app.get("/api/tags/why")
+def tags_why(i: int):
+    """Why a track has the tags and suggestions it has (known.explain), plus its top scores per axis."""
+    from . import known
+    from .rbsync import label
+
+    if not 0 <= i < len(lib.ids):
+        raise HTTPException(404)
+    out = known.explain(lib.con, lib.ids[i])
+    out["scores"] = {c: sorted(([g, round(float(lib.scores[g][i]), 2)] for g in gs if g in lib.scores), key=lambda x: -x[1])[:4]
+                     for c, gs in lib.category_tags().items()}
+    p, _ = _mytag_plan()  # what a rekordbox sync sends for this track
+    out["rekordbox"] = {c: [[label(g), how] for g, how in got] for c, got in p.get(lib.ids[i], {}).items()}
+    return out
 
 
 @app.post("/api/likes")
@@ -560,6 +683,78 @@ def rekordbox_status():
     return rekordbox.status(lib.con)
 
 
+def _trained_tags() -> set[str]:
+    return {r[0] for r in lib.con.execute(
+        "SELECT g.name FROM track_tags tt JOIN tags g ON g.id=tt.tag_id WHERE tt.status='confirmed' GROUP BY g.name HAVING COUNT(*)>=?",
+        (MIN_TRAIN,))}
+
+
+def _mytag_plan() -> tuple[dict, dict]:
+    from . import rbsync
+
+    return rbsync.plan(lib, _trained_tags()), {i: lib.rows[i]["path"] for i in lib.ids if i in lib.rows}
+
+
+@app.get("/api/rekordbox/running")
+def rekordbox_running():
+    from . import rbguard
+
+    return {"running": rbguard.running(), "lock": rbguard.status()}
+
+
+@app.post("/api/rekordbox/lock")
+def rekordbox_lock(locked: bool = Body(...), once: bool = Body(False)):
+    """The rekordbox lock (rbguard): while locked, nothing in Summit can change rekordbox. Unlocking is an app action."""
+    from . import rbguard
+
+    return rbguard.set_locked(locked, once)
+
+
+@app.get("/api/rekordbox/tags")
+def rekordbox_tags():
+    """Tools › rekordbox My Tags: what a sync would send, what rekordbox has now, backups, and the last sync."""
+    from . import rbguard, rbsync
+
+    with lib.lock:
+        p, paths = _mytag_plan()
+    try:
+        cur, err = rbsync.current(), None
+    except Exception as e:  # rekordbox missing, or its library can't be opened
+        cur, err = None, str(e)
+    return {"running": rbguard.running(), "lock": rbguard.status(), "plan": rbsync.summary(p, paths, cur["paths"] if cur else None),
+            "current": {k: v for k, v in cur.items() if k != "paths"} | {"tracks": len(cur["paths"])} if cur else None,
+            "error": err, "backups": rbguard.backups(), "last": rekordbox.get(lib.con, "mytag_sync"),
+            "likely": rbsync.LIKELY, "min_train": MIN_TRAIN}
+
+
+@app.post("/api/rekordbox/tags/sync")
+def rekordbox_tags_sync():
+    from . import rbsync
+
+    with lib.lock:
+        p, paths = _mytag_plan()
+        try:
+            res = rbsync.write(p, paths)
+        except RuntimeError as e:  # rekordbox is open (423: 409 means a playlist conflict to the client)
+            raise HTTPException(423, str(e))
+        if not res.get("noop"):
+            rekordbox.put(lib.con, "mytag_sync", {"at": time.time(), **res})
+            lib.con.commit()
+    return res
+
+
+@app.post("/api/rekordbox/tags/restore")
+def rekordbox_tags_restore(stamp: str = Body(..., embed=True)):
+    from . import rbguard
+
+    try:
+        return rbguard.restore(stamp)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except RuntimeError as e:
+        raise HTTPException(423, str(e))
+
+
 @app.post("/api/rekordbox/import")
 def rekordbox_import(path: str | None = Body(None, embed=True)):
     """Read rekordbox's collection export (File → Export Collection in xml format)."""
@@ -584,6 +779,60 @@ def export():
 def library_pending():
     """Library files not on the map yet (see scan.pending), and the state of any update run."""
     return {**({} if job.running else pending(lib.con)), "job": job.state()}
+
+
+UI_REV = {"rev": f"{time.time():.0f}:0"}
+UI_SEEN = {}  # window id → (revision it has loaded, when it last asked)
+
+
+@app.get("/api/ui/rev")
+def ui_rev(have: str = "", win: str = ""):
+    if win:
+        UI_SEEN[win] = (have, time.time())
+    return UI_REV
+
+
+@app.get("/api/ui/windows")
+def ui_windows():
+    """Windows polled in the last 10 s and the revision each has loaded (summit reload waits on this)."""
+    now = time.time()
+    return {"rev": UI_REV["rev"], "windows": {w: h for w, (h, t) in UI_SEEN.items() if now - t < 10}}
+
+
+@app.post("/api/ui/reload")
+def ui_reload():
+    start, n = UI_REV["rev"].split(":")
+    UI_REV["rev"] = f"{start}:{int(n) + 1}"
+    return UI_REV
+
+
+# ---- Phone streaming (media.py, streaming.py): copies made ahead, keep-awake, Tailscale path ----
+@app.get("/api/stream/info")
+def stream_info():
+    from . import streaming
+    from .media import coverage
+
+    return {"coverage": coverage(lib.con), "job": stream_job.state(), "awake": streaming.awake_state(),
+            "tailscale": streaming.tailscale()}
+
+
+@app.post("/api/stream/run")
+def stream_run():
+    stream_job.start()
+    return stream_job.state()
+
+
+@app.delete("/api/stream/run")
+def stream_stop():
+    stream_job.stop()
+    return stream_job.state()
+
+
+@app.post("/api/stream/awake")
+def stream_awake(on: bool = Body(..., embed=True)):
+    from . import streaming
+
+    return streaming.set_keep_awake(on)
 
 
 @app.post("/api/reload")

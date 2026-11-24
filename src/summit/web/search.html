@@ -33,7 +33,7 @@
 <script>
 const H = S.H, t_ = H.t, body = document.getElementById('body'), qEl = document.getElementById('q');
 // mode: 'query' (a name or a vibe) or 'similar' (the songs that sound most like one song: the track menu's "Similar songs")
-const st = { mode: 'query', q: '', artists: [], songs: [], vibe: [], all: false, busy: false, seed: null, sim: [], n: 25 };
+const st = { mode: 'query', q: '', artists: [], songs: [], vibe: [], tags: null, all: false, busy: false, seed: null, sim: [], n: 25 };
 try { st.n = +localStorage.getItem('summit.simN') || 25; } catch (e) {}
 let seq = 0;
 
@@ -50,7 +50,7 @@ S.ready.then(() => {
 async function run(q) {
   q = (q || '').trim();
   const my = ++seq;
-  Object.assign(st, { mode: 'query', q, all: false, artists: [], songs: [], vibe: [] });
+  Object.assign(st, { mode: 'query', q, all: false, artists: [], songs: [], vibe: [], tags: null });
   qEl.value = q; H.query = q; H.emit('query', q);
   if (!q) { render(); return; }
   const b = H.browse();
@@ -58,8 +58,11 @@ async function run(q) {
   st.songs = b.songs(q, 500);
   st.busy = true; render();
   try {
-    const have = new Set(st.songs), res = await H.api(`/api/search?q=${encodeURIComponent(q)}&n=${H.searchOpts.n + Math.min(have.size, 200)}&mode=vibe`);
+    const have = new Set(st.songs);
+    const [res, tags] = await Promise.all([H.api(`/api/search?q=${encodeURIComponent(q)}&n=${H.searchOpts.n + Math.min(have.size, 200)}&mode=vibe`),
+      H.api(`/api/search/tags?q=${encodeURIComponent(q)}`)]);
     if (my !== seq) return;
+    st.tags = tags.tags.length ? tags : null;
     st.vibe = res.filter(r => !have.has(r.i)).slice(0, H.searchOpts.n);
   } catch (err) { S.toast(err.message); }
   st.busy = false; render();
@@ -90,6 +93,8 @@ function render() {
         ${shown.map(j => row(j, 'songs')).join('') || `<div class="muted small" style="padding:6px 8px">${t_('noNameMatches')}</div>`}
         ${st.songs.length > shown.length ? `<button class="ghost small" data-act="all">${t_('showAllN', { n: st.songs.length })}</button>` : ''}</div>
       <div class="section"><h3>${t_('soundsLikeQ', { x: S.esc(st.q) })}</h3>
+        ${st.tags ? `<div class="small muted" style="padding:0 8px 8px">${t_('tagsInQuery')}: ${st.tags.tags.map(g => S.chip(g)).join('')}
+          ${t_('tagsInQueryN', { c: st.tags.confirmed.toLocaleString(), l: st.tags.likely.toLocaleString() })}</div>` : ''}
         ${st.busy ? `<div class="progress indet" style="margin:10px 8px"><b></b></div>` : st.vibe.map(r => row(r.i, 'vibe', r.score)).join('') || `<div class="muted small" style="padding:6px 8px">—</div>`}</div>
     </div>`;
 }

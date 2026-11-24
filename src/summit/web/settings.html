@@ -25,7 +25,6 @@
   <div class="pagebody"><div class="wrap">
     <section class="frame" id="sec-look">
       <div class="panel-head"><h2 data-i18n="set.appearance">Appearance</h2></div>
-      <div class="opt"><div class="what"><b data-i18n="set.look">Look</b><span data-i18n="set.lookSub">Also on the phone: Library › ⚙</span></div><span class="seg" id="look"></span></div>
       <div class="opt"><div class="what"><b data-i18n="set.lang">Language</b><span data-i18n="set.langSub">Interface text; library data stays as it is</span></div>
         <span class="seg" id="lang"><button data-v="en">EN</button><button data-v="ja">日本語</button></span></div>
       <div class="opt"><div class="what"><b data-i18n="set.help">Help layer</b><span data-i18n-html="set.helpSub"></span></div>
@@ -68,11 +67,9 @@ const H = S.H, t_ = H.t, $ = s => document.querySelector(s);
 let cfg = null;
 
 function toggles() {
-  $('#look').innerHTML = Object.keys(H.LOOKS).map(k => `<button data-v="${k}" class="${k === H.look ? 'on' : ''}">${S.esc(t_('look.' + k))}</button>`).join('');
   document.querySelectorAll('#lang button').forEach(b => b.classList.toggle('on', b.dataset.v === H.lang));
   document.querySelectorAll('#help button').forEach(b => b.classList.toggle('on', (b.dataset.v === '1') === !!H.help));
 }
-$('#look').onclick = e => { const b = e.target.closest('button'); if (b && b.dataset.v !== H.look) { H.setLook(b.dataset.v); toggles(); } };
 $('#lang').onclick = e => { const b = e.target.closest('button'); if (b && b.dataset.v !== H.lang) { H.setLang(b.dataset.v); } };
 $('#help').onclick = e => { const b = e.target.closest('button'); if (b) { H.setHelp(b.dataset.v === '1'); toggles(); } };
 

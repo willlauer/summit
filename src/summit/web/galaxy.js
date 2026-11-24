@@ -63,27 +63,57 @@ const FRAG_HALO = /* glsl */`
     if (a < 0.004) discard;
     gl_FragColor = vec4(vColor * a, a);
   }`;
-// Pixel style's sky: a smooth, very dark gradient; gusts streak across and snow blows sideways in two layers.
+// Pixel styles' sky, drawn per pixel cell. uFx picks the look's effect: 1 Ice (gusts and blown snow), 2 Arcade (a
+// neon horizon grid under twinkling stars), 3 Moss (dithered bands and drifting fireflies), 4 Quest (a starfield).
 const SKY_VERT = /* glsl */`void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 const SKY_FRAG = /* glsl */`
-  uniform vec2 uRes; uniform float uTime, uPx; uniform vec3 uTop, uBottom;
+  uniform vec2 uRes; uniform float uTime, uPx, uFx; uniform vec3 uTop, uBottom;
   float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
   void main() {
     float y = gl_FragCoord.y / uRes.y;
     vec3 c = mix(uBottom, uTop, y * y) + (hash(gl_FragCoord.xy) - 0.5) / 255.0;
     vec2 cell = floor(vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y) / uPx);
-    float t = uTime, cols = uRes.x / uPx;
-    float gust = 0.55 + 0.45 * sin(t * 0.21) * sin(t * 0.13 + 1.3);
-    float lane = floor(cell.y / 11.0), hl = hash(vec2(lane, 1.7));
-    float wob = floor(sin(cell.x * 0.035 + t * 0.6 + lane) * 1.5);
-    if (mod(cell.y + wob, 11.0) == 0.0 && hl > 0.5) {
-      float speed = 22.0 + hl * 40.0, len = 18.0 + hash(vec2(lane, 4.2)) * 40.0, span = cols + len * 2.0 + 60.0;
-      float head = mod(t * speed * (0.6 + gust * 0.6) + hash(vec2(lane, 9.1)) * span, span) - len;
-      float d = head - cell.x;
-      if (d >= 0.0 && d < len) c = mix(c, vec3(0.70, 0.88, 1.0), (1.0 - d / len) * 0.13 * gust);
+    float t = uTime, cols = uRes.x / uPx, rows = uRes.y / uPx;
+    if (uFx < 1.5) {
+      float gust = 0.55 + 0.45 * sin(t * 0.21) * sin(t * 0.13 + 1.3);
+      float lane = floor(cell.y / 11.0), hl = hash(vec2(lane, 1.7));
+      float wob = floor(sin(cell.x * 0.035 + t * 0.6 + lane) * 1.5);
+      if (mod(cell.y + wob, 11.0) == 0.0 && hl > 0.5) {
+        float speed = 22.0 + hl * 40.0, len = 18.0 + hash(vec2(lane, 4.2)) * 40.0, span = cols + len * 2.0 + 60.0;
+        float head = mod(t * speed * (0.6 + gust * 0.6) + hash(vec2(lane, 9.1)) * span, span) - len;
+        float d = head - cell.x;
+        if (d >= 0.0 && d < len) c = mix(c, vec3(0.70, 0.88, 1.0), (1.0 - d / len) * 0.13 * gust);
+      }
+      if (hash(floor(vec2(cell.x - t * (26.0 + 18.0 * gust), cell.y - t * 6.0)) + 0.37) > 0.9986) c = mix(c, vec3(0.92, 0.97, 1.0), 0.5);
+      if (hash(floor(vec2(cell.x - t * (11.0 + 8.0 * gust) + floor(sin(cell.y * 0.07 + t) * 2.0), cell.y - t * 3.0)) + 7.1) > 0.9982) c = mix(c, vec3(0.75, 0.87, 1.0), 0.28);
+    } else if (uFx < 2.5) {
+      float hz = rows * 0.68;
+      if (cell.y > hz) {
+        float d = cell.y - hz + 1.0, depth = 40.0 / d;
+        float z = fract(depth * 0.35 - t * 0.35);
+        float hline = step(z, 0.12 / max(depth, 0.6)) * step(2.0, d);
+        float xw = (cell.x - cols * 0.5) / d;
+        float vline = step(abs(fract(xw * 0.5) - 0.5), 0.6 / d + 0.012);
+        float fade = clamp(d / (rows - hz), 0.0, 1.0);
+        c = mix(c, vec3(1.0, 0.18, 0.6), max(hline, vline) * (0.25 + 0.55 * fade));
+      } else {
+        float h = hash(cell + 3.1);
+        if (h > 0.9965) c = mix(c, vec3(0.9, 0.95, 1.0), 0.35 + 0.35 * sin(t * (1.0 + h * 3.0) + h * 40.0));
+        if (abs(cell.y - hz + 1.0) < 0.5) c = mix(c, vec3(0.0, 0.96, 0.83), 0.5);
+      }
+    } else if (uFx < 3.5) {
+      float band = floor(y * 6.0) / 6.0;
+      vec2 m = mod(cell, 4.0);
+      float bayer = hash(m + 11.0);
+      c = mix(uBottom, uTop, band + step(bayer, fract(y * 6.0)) / 6.0);
+      vec2 f = floor(vec2(cell.x + floor(sin(t * 0.4 + cell.y * 0.05) * 3.0), cell.y - t * 1.5));
+      float h = hash(f + 5.3);
+      if (h > 0.9975) c = mix(c, vec3(0.78, 0.94, 0.3), 0.55 + 0.4 * sin(t * 2.0 + h * 90.0));
+    } else {
+      float h = hash(cell + 9.7), h2 = hash(cell + 1.3);
+      if (h > 0.996) c = mix(c, h2 > 0.7 ? vec3(1.0, 0.85, 0.35) : vec3(0.92, 0.94, 1.0), 0.3 + 0.5 * max(0.0, sin(t * (0.6 + h2 * 2.0) + h * 70.0)));
+      if (h > 0.99985) c = mix(c, vec3(1.0), 0.8);
     }
-    if (hash(floor(vec2(cell.x - t * (26.0 + 18.0 * gust), cell.y - t * 6.0)) + 0.37) > 0.9986) c = mix(c, vec3(0.92, 0.97, 1.0), 0.5);
-    if (hash(floor(vec2(cell.x - t * (11.0 + 8.0 * gust) + floor(sin(cell.y * 0.07 + t) * 2.0), cell.y - t * 3.0)) + 7.1) > 0.9982) c = mix(c, vec3(0.75, 0.87, 1.0), 0.28);
     gl_FragColor = vec4(c, 1.0);
   }`;
 
@@ -128,12 +158,12 @@ export function createGalaxy(container, opts = {}) {
   halo.frustumCulled = core.frustumCulled = false;
   scene.add(halo, core);
   // Pixel style: the sky, drawn behind everything as one full-screen quad.
-  const skyUni = { uRes: uni.uRes, uPx: uni.uPx, uTime: { value: 0 }, uTop: { value: new THREE.Color('#071019') }, uBottom: { value: new THREE.Color('#03070d') } };
+  const skyUni = { uRes: uni.uRes, uPx: uni.uPx, uTime: { value: 0 }, uFx: { value: 1 }, uTop: { value: new THREE.Color('#071019') }, uBottom: { value: new THREE.Color('#03070d') } };
   const skyScene = new THREE.Scene(), skyCam = new THREE.Camera();
   const skyMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({ vertexShader: SKY_VERT, fragmentShader: SKY_FRAG, uniforms: skyUni, depthTest: false, depthWrite: false }));
   skyMesh.frustumCulled = false;
   skyScene.add(skyMesh);
-  const style = { pixel: false, wind: false };
+  const style = { pixel: false, wind: false, fx: 1 };
   const born = performance.now();
   /** Switch looks: {pixel, wind, top, bottom} (sky colours as CSS colours). */
   function setStyle(s) {
@@ -141,6 +171,7 @@ export function createGalaxy(container, opts = {}) {
     uni.uPixel.value = style.pixel ? 1 : 0;
     uni.uSize.value = style.pixel ? o.dot * 0.62 : o.dot;
     uni.uGlow.value = style.pixel ? 0.09 : o.glow;
+    skyUni.uFx.value = style.fx || 1;
     if (s.top) skyUni.uTop.value.set(s.top);
     if (s.bottom) skyUni.uBottom.value.set(s.bottom);
     renderer.setClearColor(0x000000, 0);

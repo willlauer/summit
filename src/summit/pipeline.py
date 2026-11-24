@@ -28,14 +28,29 @@ def update(log=print) -> None:
     scan(log=log)
     log("== analyze")
     analyze(log=log)
-    if not counts(db.connect())["unplaced"]:
-        log("== done: the map is already up to date")
-        return
-    log("== layout")
-    layout(log=log)
-    log("== label")
-    label(log=log)
+    if counts(db.connect())["unplaced"]:
+        log("== layout")
+        layout(log=log)
+        log("== label")
+        label(log=log)
+    else:
+        log("the map is already up to date")
+    tags(limit=TAG_LOOKUPS_PER_UPDATE, log=log)
     log("== done")
+
+
+TAG_LOOKUPS_PER_UPDATE = 200  # per source: new tracks; a bigger backlog is Tools › Tags › Look up tags
+
+
+def tags(limit: int | None = None, log=print) -> None:
+    """Known-data tagging: Discogs and Last.fm lookups for tracks not looked up yet, then resolve (known.py)."""
+    from .known import fetch, resolve
+
+    for src in ("discogs", "lastfm"):
+        log(f"== {src}")
+        fetch([src], limit=limit, log=log)
+    log("== resolve")
+    resolve(log=log)
 
 
 def notify_server() -> None:
@@ -54,12 +69,14 @@ def notify_server() -> None:
 
 # Progress lines the steps print: "  scanned 500/3900", "  96/400 · 2.1 tracks/s …", and "analyze: 400 tracks · …" (the total).
 PROGRESS = re.compile(r"^\s+(?:scanned )?(\d+)/(\d+)")
-TOTAL = re.compile(r"^analyze: (\d+) tracks")
+TOTAL = re.compile(r"^(?:analyze|transcode): (\d+) tracks")
 
 
 class Job:
-    def __init__(self, on_done):
-        self.on_done, self.proc, self.lines = on_done, None, deque(maxlen=200)
+    """A `summit <args>` subprocess with its progress parsed from its output (`== stage` lines, `  n/total`)."""
+
+    def __init__(self, on_done, args=("update",), first_stage="scan"):
+        self.on_done, self.args, self.first, self.proc, self.lines = on_done, list(args), first_stage, None, deque(maxlen=200)
         self.stage, self.progress, self.code, self.stopped = None, None, None, False
         atexit.register(self.stop)  # closing the app ends the run; the next one resumes where it stopped
 
@@ -71,9 +88,9 @@ class Job:
         if self.running:
             return False
         self.lines.clear()
-        self.stage, self.progress, self.code, self.stopped = "scan", None, None, False
+        self.stage, self.progress, self.code, self.stopped = self.first, None, None, False
         self.proc = subprocess.Popen(
-            [sys.executable, "-u", "-m", "summit", "update"], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            [sys.executable, "-u", "-m", "summit", *self.args], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, start_new_session=True,  # own process group, so stop() also reaches analyze's workers
             env={**os.environ, "SUMMIT_JOB": "1"},
         )

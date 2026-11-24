@@ -26,48 +26,18 @@ EFFNET_ONNX = MODELS / "discogs-effnet-bsdynamic-1.onnx"
 EFFNET_META = MODELS / "discogs-effnet-bsdynamic-1.json"
 
 # Embedding spaces the map can show. Each combines one or more per-track vector kinds (rows in `vectors`), each
-# centred, partially whitened and weighted equally (similar.py). "styles" are EffNet's Discogs style probabilities. To try a new model: write its vectors under a new kind, add a space here,
+# L2-normalised and weighted equally. To try a new model: write its vectors under a new kind, add a space here,
 # then `summit layout`. The app's space picker is built from this list.
 SPACES = {
     "clap": {"label": "CLAP", "kinds": ["clap"]},
     "effnet": {"label": "EffNet", "kinds": ["effnet"]},
-    "combined": {"label": "Combined", "kinds": ["clap", "effnet", "styles"]},
+    "combined": {"label": "Combined", "kinds": ["clap", "effnet"]},
 }
 DEFAULT_SPACE = "combined"
 TAG_SPACE = "combined"  # tag classifiers and vibes train on this space
 UMAP_NEIGHBORS = 15
 SEED = 42
 
-# Tag vocabulary (mirrors rekordbox My Tag categories). Each tag is scored zero-shot with a CLAP text prompt
-# until the user confirms enough examples to train it.
-TAGS = {
-    "Mood": {
-        "dark": "dark, ominous, brooding electronic music",
-        "warm": "warm, soulful, comforting music",
-        "euphoric": "euphoric, uplifting, joyful dance music",
-        "melancholic": "melancholic, sad, wistful music",
-        "hypnotic": "hypnotic, repetitive, trance-inducing groove",
-        "playful": "playful, bouncy, fun music",
-    },
-    "Energy": {
-        "warm-up": "gentle, low-energy opening dj track",
-        "builder": "building, rising energy dance track",
-        "peak": "peak-time, high-energy, intense club track",
-        "closer": "calm, emotional closing track",
-    },
-    "Texture": {
-        "dubby": "dub techno with deep echoes and reverb chords",
-        "acid": "acid squelchy 303 bassline",
-        "vocal": "track with prominent singing vocals",
-        "percussive": "percussion-driven track with lots of drums",
-        "piano": "track with prominent piano",
-        "lush pads": "lush atmospheric synth pads",
-        "rolling bass": "rolling, driving bassline",
-    },
-    "Situation": {
-        "late night": "late night, after-dark club music",
-        "afterhours": "deep, hypnotic afterhours music",
-        "daytime": "sunny daytime outdoor party music",
-        "sunrise": "dreamy sunrise music",
-    },
-}
+# Tag taxonomy lives in taxonomy.py. API keys for the known-data lookups (summit tags fetch, Tools › Tags):
+# {"discogs": "<personal access token>", "lastfm": "<api key>"}. data/ is git-ignored.
+KEYS_FILE = DATA / "keys.json"

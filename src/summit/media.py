@@ -1,6 +1,10 @@
-"""Audio and artwork for the phone. Lossless files (AIFF, WAV, FLAC, ALAC) are transcoded once, on first request,
-to 256k AAC under data/cache/stream; MP3 and AAC files are served as they are. Cover art is pulled from the file's
-tags and cached as small JPEGs under data/cache/art. Originals are never touched."""
+"""Audio and artwork for the phone, in two qualities:
+- high: lossless files (AIFF, WAV, FLAC, ALAC) as 256k AAC under data/cache/stream; MP3 and AAC as they are.
+- low: every track as 128k AAC under data/cache/stream128 (a third of the size, for cellular), unless the file is
+  already that small.
+Both are made ahead of time by `summit transcode` (the server runs it after each library update), so a first play never
+waits on a conversion; a track that isn't ready yet is converted on request. Cover art is pulled from the file's tags
+and cached as small JPEGs under data/cache/art. Originals are never touched."""
 
 import os
 import shutil
@@ -13,6 +17,9 @@ from pathlib import Path
 from .config import DATA
 
 STREAM = DATA / "cache/stream"
+STREAM_LOW = DATA / "cache/stream128"
+QUALITIES = ("high", "low")
+LOW_KBPS = 128
 ART = DATA / "cache/art"
 LOSSY_KBPS = 400  # above this an .m4a is ALAC (or an .mp3 is padded with artwork): still fine to send as-is if lossy
 TYPES = {"aiff": "audio/aiff", "aif": "audio/aiff", "m4a": "audio/mp4", "mp3": "audio/mpeg", "wav": "audio/wav", "flac": "audio/flac"}
@@ -29,28 +36,48 @@ def _lock(key: str) -> threading.Lock:
         return _locks.setdefault(key, threading.Lock())
 
 
-def needs_transcode(row: dict) -> bool:
+def _kbps(row: dict) -> float:
+    return (row["size"] or 0) * 8 / row["duration"] / 1000 if row["duration"] else 9999
+
+
+def needs_transcode(row: dict, q: str = "high") -> bool:
     fmt = row["format"]
+    if q == "low":
+        return not (fmt in ("mp3", "m4a") and _kbps(row) <= LOW_KBPS + 32)
     if fmt == "mp3":
         return False
     if fmt == "m4a" and row["duration"]:
-        return (row["size"] or 0) * 8 / row["duration"] / 1000 > LOSSY_KBPS
+        return _kbps(row) > LOSSY_KBPS
     return True
 
 
-def stream_file(row: dict) -> tuple[Path, str]:
-    """(path, media type) of a phone-friendly file for this track, transcoding it now if needed."""
-    if not needs_transcode(row):
+def cached_path(row: dict, q: str = "high") -> Path:
+    return (STREAM_LOW if q == "low" else STREAM) / f"{row['id']}.m4a"
+
+
+def is_ready(row: dict, q: str = "high") -> bool:
+    """Can this track be sent right away in this quality (no conversion first)?"""
+    if not needs_transcode(row, q):
+        return True
+    out = cached_path(row, q)
+    return out.exists() and out.stat().st_mtime >= (row["mtime"] or 0)
+
+
+def stream_file(row: dict, q: str = "high") -> tuple[Path, str]:
+    """(path, media type) of a phone-friendly file for this track in quality q, transcoding it now if needed."""
+    q = q if q in QUALITIES else "high"
+    if not needs_transcode(row, q):
         return Path(row["path"]), TYPES.get(row["format"], "application/octet-stream")
-    out = STREAM / f"{row['id']}.m4a"
-    with _lock(row["id"]):
-        if not out.exists() or out.stat().st_mtime < (row["mtime"] or 0):
-            STREAM.mkdir(parents=True, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(suffix=".m4a", dir=STREAM)
+    out = cached_path(row, q)
+    with _lock(f"{q}:{row['id']}"):
+        if not is_ready(row, q):
+            out.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(suffix=".m4a", dir=out.parent)
             os.close(fd)
             try:
                 subprocess.run([FFMPEG, "-nostdin", "-v", "error", "-y", "-i", row["path"], "-map", "0:a:0", "-c:a", "aac_at",
-                                "-b:a", "256k", "-movflags", "+faststart", tmp], check=True, capture_output=True, timeout=300)
+                                "-b:a", "128k" if q == "low" else "256k", "-movflags", "+faststart", tmp],
+                               check=True, capture_output=True, timeout=300)
                 os.replace(tmp, out)
             finally:
                 if os.path.exists(tmp):
@@ -66,12 +93,12 @@ class Prefetch:
         self.cv = threading.Condition()
         threading.Thread(target=self._run, daemon=True).start()
 
-    def add(self, rows: list[dict]) -> None:
+    def add(self, rows: list[dict], q: str = "high") -> None:
         with self.cv:
-            queued = {r["id"] for r in self.q}
+            queued = {(r["id"], k) for r, k in self.q}
             for r in rows:
-                if needs_transcode(r) and r["id"] not in queued and not (STREAM / f"{r['id']}.m4a").exists():
-                    self.q.append(r)
+                if (r["id"], q) not in queued and not is_ready(r, q):
+                    self.q.append((r, q))
             self.cv.notify()
 
     def _run(self) -> None:
@@ -79,25 +106,45 @@ class Prefetch:
             with self.cv:
                 while not self.q:
                     self.cv.wait()
-                row = self.q.popleft()
+                row, q = self.q.popleft()
             try:
-                stream_file(row)
+                stream_file(row, q)
             except Exception:
                 pass
 
 
-def transcode_all(con, log=print) -> None:
-    """Convert every lossless track now (e.g. overnight) instead of on first play."""
+def coverage(con) -> dict:
+    """Per quality: tracks that can be sent right away, out of all."""
+    rows = [dict(r) for r in con.execute("SELECT id, format, size, duration, mtime FROM tracks WHERE missing=0")]
+    return {q: {"ready": sum(is_ready(r, q) for r in rows), "total": len(rows)} for q in QUALITIES}
+
+
+def transcode_all(con, log=print, workers: int = 4) -> None:
+    """Make every track's streaming copies now (both qualities), so the phone never waits on a conversion. Runs at low
+    CPU priority; stopping it is safe (the next run picks up where it stopped)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    try:
+        os.nice(10)
+    except OSError:
+        pass
     rows = [dict(r) for r in con.execute("SELECT * FROM tracks WHERE missing=0")]
-    todo = [r for r in rows if needs_transcode(r) and not (STREAM / f"{r['id']}.m4a").exists()]
-    log(f"transcode: {len(todo)} of {len(rows)} tracks")
-    for k, r in enumerate(todo, 1):
+    todo = [(r, q) for q in ("low", "high") for r in rows if not is_ready(r, q)]  # low first: it's what cellular plays
+    log(f"transcode: {len(todo)} tracks")
+    done = 0
+
+    def one(item):
+        r, q = item
         try:
-            stream_file(r)
+            stream_file(r, q)
         except Exception as e:
-            log(f"  failed {r['path']}: {e}")
-        if k % 25 == 0 or k == len(todo):
-            log(f"  {k}/{len(todo)}")
+            log(f"  failed {r['path']} ({q}): {e}")
+
+    with ThreadPoolExecutor(workers) as ex:
+        for _ in ex.map(one, todo):
+            done += 1
+            if done % 10 == 0 or done == len(todo):
+                log(f"  {done}/{len(todo)}")
 
 
 def _embedded_art(path: str) -> bytes | None:

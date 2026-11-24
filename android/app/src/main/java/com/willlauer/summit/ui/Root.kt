@@ -144,9 +144,7 @@ fun SettingsScreen(bottomPad: androidx.compose.ui.unit.Dp) {
                     style = MaterialTheme.typography.bodySmall, color = if (status == Status.Ready) C.Green else C.Muted)
             }
             Spacer(Modifier.height(24.dp))
-            Text("Look", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
-            LookPicker()
+            StreamingPicker()
             Spacer(Modifier.height(24.dp))
             Text("Reach your Mac from anywhere with Tailscale: run `tailscale serve --bg 8766` on the Mac and use the https://….ts.net address it prints. "
                 + "Over USB during development, `adb reverse tcp:8766 tcp:8766` makes http://127.0.0.1:8766 work.", style = MaterialTheme.typography.bodySmall)

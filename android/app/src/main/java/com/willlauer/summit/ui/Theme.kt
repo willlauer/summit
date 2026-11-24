@@ -72,15 +72,28 @@ object Looks {
         skyTop = Color(0xFF071019), skyBottom = Color(0xFF03070D), wind = true,
     )
 
-    val all = listOf(Classic, Pixel)
-    fun byKey(k: String?) = all.find { it.key == k } ?: Pixel
+    /** The look (as on the desktop, web/shared.css): electric blue and ice white on near-black, smooth glowing stars. */
+    val IceWire = Look(
+        "icewire", "Ice Wire", pixel = false,
+        bg = Color(0xFF03060F), panel = Color(0xFF060C1C), raised = Color(0xFF0C1A3A), raised2 = Color(0xFF12244A),
+        text = Color(0xFFE2EFFF), muted = Color(0xFF8EA8D6), faint = Color(0xFF4C6290), line = Color(0x422F7BFF),
+        accent = Color(0xFFD8F6FF), accentLight = Color(0xFFFFFFFF), accentDeep = Color(0xFF2F7BFF), like = Color(0xFF2F7BFF),
+        select = Color(0xFFD8F6FF), added = Color(0xFF6FFFE0), similar = Color(0xFF6E8BFF), ink = Color(0xFF020814), shade = Color(0xFF000000),
+        palette = ints(0xFF2F7BFF, 0xFF7CC8FF, 0xFF6FFFE0, 0xFFA48BFF, 0xFFD8F6FF, 0xFF38B6FF, 0xFF5CE1E6, 0xFF6E8BFF,
+            0xFF9FE8FF, 0xFF4F6DFF, 0xFF3DFFC0, 0xFFC6D8FF, 0xFF00D2FF, 0xFF8EF0FF, 0xFF7A7DFF, 0xFFB8F2FF),
+        skyTop = Color(0xFF07122A), skyBottom = Color(0xFF02040A), wind = false,
+    )
+
+    // Ice Wire is locked in; Classic and Pixel stay defined for reference but aren't offered.
+    val all = listOf(IceWire)
+    fun byKey(@Suppress("UNUSED_PARAMETER") k: String?) = IceWire
 }
 
 /** The look in use (persisted by Repo). Reading it in a composable re-renders that composable when it changes. */
 object LookState {
-    var current by mutableStateOf(Looks.Pixel); private set
+    var current by mutableStateOf(Looks.IceWire); private set
     fun set(l: Look) { com.willlauer.summit.data.PALETTE = l.palette; current = l }
-    init { com.willlauer.summit.data.PALETTE = Looks.Pixel.palette }
+    init { com.willlauer.summit.data.PALETTE = Looks.IceWire.palette }
 }
 private val L get() = LookState.current
 

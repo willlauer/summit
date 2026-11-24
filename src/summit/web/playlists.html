@@ -15,15 +15,15 @@
   .side .foot { padding: 10px 14px 14px; border-top: 1px solid var(--line); }
   .side .foot .actions { margin-top: 0; }
   .pl { display: flex; align-items: center; gap: 8px; padding: 7px 6px 7px calc(var(--d, 0) * 16px + 8px); cursor: pointer; border-radius: 8px; }
-  .pl:hover { background: rgba(255, 255, 255, .05); }
-  .pl.on { background: rgba(62, 230, 255, .1); box-shadow: inset 2px 0 0 var(--cyan); color: #fff; }
+  .pl:hover { background: rgb(var(--tint) / .05); }
+  .pl.on { background: color-mix(in srgb, var(--cyan) 10%, transparent); box-shadow: inset 2px 0 0 var(--cyan); color: var(--hi); }
   .pl .grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pl[draggable="true"] { cursor: grab; }
   .pl.dragging { opacity: .4; }
   .fold .grow { font-weight: 600; }
   .pl .tools { visibility: hidden; display: flex; }
   .pl:hover .tools { visibility: visible; }
-  .pl.drop-into { box-shadow: inset 0 0 0 1px var(--cyan); background: rgba(62, 230, 255, .06); }
+  .pl.drop-into { box-shadow: inset 0 0 0 1px var(--cyan); background: color-mix(in srgb, var(--cyan) 6%, transparent); }
   .droptop { display: none; justify-content: center; color: var(--muted); font-size: 12px; border: 1px dashed var(--line); margin-top: 6px; }
   .tree-drag .droptop { display: flex; }
   .detail { min-width: 0; }
@@ -78,7 +78,16 @@ S.ready.then(() => {
   });
 });
 
+// ⌘/Ctrl- or Shift-click rows to pick several songs, then add them to another playlist (or remove them from this one).
+const pick = H.rowSelect(detail, {
+  order: () => { const p = cur(); return p ? H.playlistTracks(p) : []; },
+  actions: () => { const p = cur(); return editable(p) ? [{ label: t_('removeN', { n: pick.size() }), danger: true, run: idxs => {
+    const drop = new Set(idxs.map(j => S.tracks[j].id)); return H.editPlaylist(p.id, ids => ids.filter(id => !drop.has(id)));
+  } }] : []; },
+});
+
 function select(id) {
+  if (id !== st.sel) pick.clear();
   st.sel = id;
   try { localStorage.setItem('summit.pl.sel', JSON.stringify(id)); } catch (e) {}
   render();
@@ -125,6 +134,7 @@ function renderDetail() {
       <div class="actions">
         <button class="primary" data-act="play" ${idxs.length ? '' : 'disabled'}>${t_('play')}</button><button data-act="shuffle" ${idxs.length ? '' : 'disabled'}>${t_('shuffleBtn')}</button>
         <button data-act="map" ${idxs.length ? '' : 'disabled'}>${t_('showOnMap')}</button>
+        <button data-act="addall" ${idxs.length ? '' : 'disabled'}>${t_('addAllToPl')}</button>
         ${H.syncAvailable !== false ? `<button data-act="device" title="${t_('sendToDeviceTip')}">${t_('sendToDevice')}</button>` : ''}
         <span class="grow"></span><button class="danger" data-act="del">${t_('delete')}</button>
       </div>
@@ -133,7 +143,7 @@ function renderDetail() {
     <div class="pagebody" style="padding-top:4px">${idxs.length ? `<table>
       <thead><tr><th style="width:34px"></th><th></th><th>${t_('title')}</th><th>${t_('artist')}</th><th>BPM</th><th>${t_('key')}</th><th>${t_('length')}</th><th></th></tr></thead>
       <tbody id="rows">${idxs.map((j, k) => row(j, k, edit)).join('')}</tbody></table>
-      ${edit ? `<p class="hint">${t_('dragToReorderLong')}</p>` : ''}` : `<div class="empty">${t_('plEmpty')}</div>`}</div>`;
+      <p class="hint">${edit ? t_('dragToReorderLong') + ' ' : ''}${t_('selectTip')}</p>` : `<div class="empty">${t_('plEmpty')}</div>`}</div>`;
 }
 function row(j, k, edit) {
   const t = S.tracks[j];
@@ -161,6 +171,7 @@ document.body.addEventListener('click', async e => {
     e.stopPropagation();
     if (a === 'play' || a === 'shuffle') { H.playList(H.playlistTracks(p), p.name, a === 'shuffle'); return; }
     if (a === 'map') { H.showPlaylistOnMap(p.id); return; }
+    if (a === 'addall') { H.playlistMenu(el, H.playlistTracks(p)); return; }
     if (a === 'device') { H.sendToDevice(p.id); return; }
     if (a === 'ren') { const n = prompt(t_('playlistName'), p.name); if (n && n.trim() && n.trim() !== p.name) await H.renamePlaylist(p.id, n.trim()); }
     if (a === 'del' && confirm(t_('deletePl', { x: p.name }))) { await H.deletePlaylist(p.id); st.sel = (S.data.playlists[0] || {}).id ?? null; }

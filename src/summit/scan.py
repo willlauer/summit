@@ -37,7 +37,24 @@ def read_tags(path: Path) -> dict | None:
         if v is not None and not isinstance(v, str):
             v = v[0] if isinstance(v, list) else getattr(v, "text", [str(v)])[0]
         out[k] = str(v).strip() if v else None
+    out["year"] = file_year(f)
     return out
+
+
+def file_year(f) -> int:
+    """The release year in a file's tags (easy-mode date/originaldate, else ID3 / MP4 frames); 0 if none."""
+    import re
+
+    vals = []
+    for k in ("originaldate", "date", "TDOR", "TDRC", "TYER", "TORY", "©day", "year"):
+        try:
+            v = (f.tags or {}).get(k)
+        except Exception:
+            v = None
+        if v is not None:
+            vals.append(str(v[0] if isinstance(v, list) else getattr(v, "text", [v])[0]))
+    ys = [int(m) for v in vals for m in re.findall(r"\b(19[2-9]\d|20[0-4]\d)\b", v)]
+    return min(ys) if ys else 0
 
 
 def files(root: Path = LIBRARY) -> list[Path]:
@@ -73,7 +90,7 @@ def scan(root: Path = LIBRARY, log=print) -> dict:
         h = content_hash(p, st.st_size)
         meta = dict(
             artist=tags["artist"] or p.parent.parent.name, title=tags["title"] or p.stem, album=tags["album"] or p.parent.name,
-            genre=tags["genre"], duration=tags["duration"], format=p.suffix.lower().lstrip("."), size=st.st_size, mtime=st.st_mtime, hash=h,
+            genre=tags["genre"], year=tags["year"], duration=tags["duration"], format=p.suffix.lower().lstrip("."), size=st.st_size, mtime=st.st_mtime, hash=h,
         )
         moved = by_hash.get(h) if not row else None
         if moved and not Path(moved["path"]).exists():

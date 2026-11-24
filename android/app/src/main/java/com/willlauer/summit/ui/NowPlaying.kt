@@ -61,6 +61,7 @@ fun NowPlaying() {
     val app = LocalApp.current
     val ps by app.player.state.collectAsStateWithLifecycle()
     val liked by app.repo.liked.collectAsStateWithLifecycle()
+    val onPhone by com.willlauer.summit.playback.Streaming.onPhone.collectAsStateWithLifecycle()  // queue marks
     val lib = app.repo.lib.collectAsStateWithLifecycle().value ?: return
     val i = ps.current ?: run { app.nowPlaying = false; return }
     val t = lib.tracks[i]
@@ -146,6 +147,7 @@ fun NowPlaying() {
                         Text(lib.tracks[v.value].name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(lib.tracks[v.value].by, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
+                    if (lib.tracks[v.value].id in onPhone) Text("✓ on phone", style = MaterialTheme.typography.labelSmall, color = C.Muted)
                     IconButton(onClick = { app.player.removeAt(v.index) }) { Icon(PI.Close, "Remove from queue", tint = C.Faint) }
                 }
             }

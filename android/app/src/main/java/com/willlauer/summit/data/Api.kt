@@ -52,7 +52,7 @@ class Api(val http: OkHttpClient, var base: String) {
         putJsonArray("ids") { ids.forEach { add(it) } }; put("k", k); put("space", space)
     }))
     suspend fun like(id: String, liked: Boolean) { call("POST", "/api/likes", buildJsonObject { put("id", id); put("liked", liked) }) }
-    suspend fun prefetch(ids: List<String>) { call("POST", "/api/prefetch", buildJsonObject { putJsonArray("ids") { ids.forEach { add(it) } } }) }
+    suspend fun prefetch(ids: List<String>, q: String = "high") { call("POST", "/api/prefetch", buildJsonObject { putJsonArray("ids") { ids.forEach { add(it) } }; put("q", q) }) }
 
     suspend fun createPlaylist(name: String, ids: List<String>, folder: Int? = null): Created = json.decodeFromString(call("POST", "/api/playlists", buildJsonObject {
         put("name", name); putJsonArray("ids") { ids.forEach { add(it) } }; put("kind", "playlist"); put("folder", folder ?: 0)

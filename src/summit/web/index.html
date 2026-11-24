@@ -32,6 +32,15 @@
     .viewctl .ctl > span:first-child { display: none; }
   }
   .search { flex: 1; min-width: 160px; max-width: 420px; }
+  /* phone width: the search and the map controls drop to their own rows, so tools and help stay on screen */
+  @media (max-width: 760px) {
+    header.top { flex-wrap: wrap; gap: 6px 8px; padding: 6px 8px; }
+    .search { order: 10; flex: 1 1 100%; max-width: none; min-width: 0; }
+    .viewctl { order: 11; flex: 1 1 100%; gap: 6px; overflow-x: auto; scrollbar-width: none; }  /* one row, swipe for more */
+    .viewctl > * { flex: none; }
+    body:not(.mapmode) .viewctl { display: none; }
+    .help.hint { left: 8px; right: 8px; }
+  }
   .search { display: flex; align-items: center; gap: 4px; }
   .search input { width: 100%; }
   #searchOpts { font-size: 15px; padding: 3px 7px; }
@@ -45,17 +54,21 @@
   #frames iframe.on { display: block; }
   .boot { position: absolute; inset: 0; display: grid; place-items: center; color: var(--cyan); letter-spacing: .3em; text-transform: uppercase; }
   .boot::after { content: "▌"; color: var(--yellow); animation: blink 1s steps(1) infinite; }
-  .help.hint { position: absolute; left: 18px; top: 100%; margin-top: 6px; padding: 5px 10px; background: rgba(5, 4, 10, .9); border: 1px solid var(--line); z-index: 20; }
+  .help.hint { position: absolute; left: 18px; top: 100%; margin-top: 6px; padding: 5px 10px; background: var(--menu-bg); border: 1px solid var(--line); z-index: 20; }
   .navbtns { display: flex; gap: 2px; }
   .navbtns button { padding: 4px 9px; font-size: 14px; line-height: 1; }
-  #libBtn { white-space: nowrap; }
-  #libBtn.todo { color: var(--yellow); border-color: rgba(252, 238, 10, .5); }
-  #libBtn.busy::before { content: "◌ "; display: inline-block; animation: blink 1s steps(1) infinite; }
-  #libPanel { width: 340px; padding: 12px 14px; }
-  #libPanel .count { display: flex; justify-content: space-between; padding: 3px 0; }
-  #libPanel .count b { color: var(--yellow); font-weight: 400; }
-  #libPanel .count.zero b { color: var(--muted); }
-  #libPanel .log { margin-top: 8px; max-height: 120px; overflow: auto; font-size: 11px; color: var(--muted); white-space: pre-wrap; word-break: break-all; }
+  /* Analysis tools: always-visible top-bar icon → popup with Library (scan/analyze/map) and Tags (lookups, tagging, keys) */
+  #toolsBtn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  #toolsBtn svg { width: 16px; height: 16px; flex: none; }
+  #toolsBtn.todo { color: var(--yellow); border-color: rgba(252, 238, 10, .5); }
+  #toolsBtn.busy svg { animation: blink 1s steps(1) infinite; }
+  #toolsPanel { width: 440px; max-width: calc(100vw - 16px); max-height: calc(100vh - 70px); overflow: auto; padding: 12px 14px; }
+  #toolsPanel h4 { margin: 14px 0 4px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 11px; font-weight: 500; color: var(--faint); text-transform: uppercase; letter-spacing: .06em; }
+  #toolsPanel .tsec:first-of-type h4 { border-top: 0; padding-top: 0; margin-top: 6px; }
+  #toolsPanel .tpart { padding: 10px 12px; margin-top: 10px; }
+  #toolsPanel .tpart > header { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; align-items: center; margin-bottom: 8px; }
+  #toolsPanel .tpart > header .hint { grid-column: 2; }
+  #toolsPanel .tpart .pstat { grid-row: span 2; }
 </style>
 </head>
 <body>
@@ -74,14 +87,13 @@
       <span class="seg" id="labelsTog"><button data-v="fam" data-i18n="genres">Genres</button><button data-v="sub" data-i18n="subgenres">Subgenres</button></span></span>
   </div>
   <span class="spacer"></span>
-  <button id="libBtn" class="small ghost" hidden></button>
+  <button id="toolsBtn" class="small ghost" data-i18n-title="toolsTip" title="Analysis tools"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 10h2v4H3zm4-4h2v12H7zm4-3h2v18h-2zm4 5h2v8h-2zm4 3h2v2h-2z"/></svg><span id="toolsTxt"></span></button>
   <span class="help hint small" data-i18n-html="shellHelp"></span>
 </header>
 <nav class="nav surface" id="side">
   <h3 data-i18n="nav.explore">Explore</h3>
   <button class="navitem" data-v="map"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20m0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16m4.2 3.8-5.6 2.8-2.8 5.6 5.6-2.8zM12 10.8a1.2 1.2 0 1 1 0 2.4 1.2 1.2 0 0 1 0-2.4"/></svg><span class="label" data-i18n="mode.map">Map</span></button>
   <button class="navitem" data-v="tag"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M3 3h8.6l9.4 9.4-8.6 8.6L3 11.6zm2 2v5.8l7.4 7.4 5.8-5.8L10.8 5zm2.8 1.3a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3"/></svg><span class="label" data-i18n="mode.tag">Tag</span></button>
-  <button class="navitem" data-v="flow"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 17a3 3 0 1 1 0 .01zm16-10a3 3 0 1 1 0 .01zM6.6 15.8c3-.6 4-2.6 5-4.6s2.2-4.2 5.6-4.9l.4 2c-2.5.5-3.3 2-4.2 3.8-1.1 2.2-2.4 4.8-6.4 5.6z"/></svg><span class="label" data-i18n="mode.flow">Flow</span></button>
   <button class="navitem" data-v="tree"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M10 3h4v4h-1v3h6v4h1v4h-4v-4h1v-2h-4v2h1v4h-4v-4h1v-2H7v2h1v4H4v-4h1v-4h6V7h-1z"/></svg><span class="label" data-i18n="mode.tree">Tree</span></button>
   <h3 data-i18n="nav.library">Library</h3>
   <button class="navitem" data-v="search"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M10 3a7 7 0 0 1 5.6 11.2l5.1 5.1-1.4 1.4-5.1-5.1A7 7 0 1 1 10 3m0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10"/></svg><span class="label" data-i18n="nav.search">Search</span></button>
@@ -98,11 +110,11 @@
 
 <script>
 const H = window.Summit, frames = document.getElementById('frames');
-const PAGES = { map: '/web/map.html', tag: '/web/tag.html', flow: '/web/flow.html', tree: '/web/tree.html',
+const PAGES = { map: '/web/map.html', tag: '/web/tag.html', tree: '/web/tree.html',
   search: '/web/search.html', discover: '/web/discover.html', library: '/web/library.html', playlists: '/web/playlists.html', sync: '/web/sync.html', settings: '/web/settings.html' };
 // Modes that draw the map get its controls in the header (Tree only uses the space, for its similar songs);
 // search filters what they show, and opens the Search page from anywhere else.
-const MAPMODES = { map: 'full', tag: 'full', flow: 'full', tree: 'space' };
+const MAPMODES = { map: 'full', tag: 'full', tree: 'space' };
 const loaded = {};
 H.applyLang(document);
 
@@ -187,7 +199,7 @@ document.getElementById('labelsTog').onclick = e => {
 };
 // Look and language are set in Settings; the shell redraws what it owns.
 H.on('look', () => { if (H.data) H.renderPlayer(); });
-H.on('lang', () => { if (H.data) { colorMenu(); H.renderPlayer(); } if (lib.job) renderLib(); });
+H.on('lang', () => { if (H.data) { colorMenu(); H.renderPlayer(); } renderTools(); });
 const q = document.getElementById('q');
 q.addEventListener('keydown', e => {
   if (e.key === 'Enter') {
@@ -259,80 +271,298 @@ optsBtn.onclick = () => {
   H.on('mousedown', elsewhere);
 };
 
-// ---- library: tracks on disk that aren't on the map yet, and the update run that adds them ----
-const lib = { counts: null, job: null, poll: 0 }, libBtn = document.getElementById('libBtn');
+// ---- Analysis tools: one popup for the library run (scan → analyze → map, pipeline.update) and tagging (known.py) ----
+// "Done" messages only show for a run this page watched finish: the server keeps a finished job's state until it
+// restarts, so a page loaded later would otherwise keep announcing an old result.
+const lib = { counts: null, job: null, sawRun: false }, tg = { info: null, sawRun: false, msg: '' }, rbt = { info: null, msg: '', err: false }, st = { info: null };
+const toolsBtn = document.getElementById('toolsBtn');
+let toolsPoll = 0;
 const todo = () => (lib.counts ? lib.counts.new + lib.counts.unanalyzed + lib.counts.unplaced : 0);
+const libDone = () => lib.sawRun && lib.job && !lib.job.running && lib.job.code === 0;
+const tagDone = () => tg.sawRun && tg.info && !tg.info.job.running && tg.info.job.code === 0;
+const nf = x => (x || 0).toLocaleString();
+
 async function checkLibrary() {
   try { const r = await H.pending(); lib.job = r.job; if (!r.job.running) lib.counts = r; } catch (e) { return; }
-  renderLib();
-  if (lib.job.running) pollJob();
+  if (lib.job.running) lib.sawRun = true;
+  renderTools(); schedule();
 }
-function pollJob() {
-  clearTimeout(lib.poll);
-  lib.poll = setTimeout(async () => {
-    const was = lib.job;
-    try { lib.job = await H.update.state(); } catch (e) { pollJob(); return; }
-    if (lib.job.running) { renderLib(); pollJob(); return; }
-    if (was.running) await checkLibrary();  // finished: recount
-  }, 1500);
+async function loadTags() {
+  try { tg.info = await H.api('/api/tags/info'); } catch (e) { return; }
+  if (tg.info.job.running) tg.sawRun = true;
+  renderTools(); schedule();
 }
-function libLabel() {
-  const j = lib.job;
-  if (j && j.running) return H.t('upd.' + j.stage) + (j.progress ? ` ${j.progress[0]}/${j.progress[1]}` : '');
-  if (j && j.code === 0) return H.t('libUpdated');
-  if (!todo()) return H.t('libOk');
-  return lib.counts.unanalyzed + lib.counts.unplaced ? H.t('libTodo', { n: todo() }) : H.t('libNewFiles', { n: todo() });  // unscanned files may not be tracks
+function schedule() {
+  clearTimeout(toolsPoll);
+  const busy = (lib.job && lib.job.running) || (tg.info && tg.info.job.running) || (st.info && st.info.job.running);
+  if (!busy && !document.getElementById('toolsPanel') && !mounts.size) return;
+  toolsPoll = setTimeout(async () => {
+    const libWas = lib.job && lib.job.running;
+    try { lib.job = await H.update.state(); if (lib.job.running) lib.sawRun = true; } catch (e) {}
+    if (libWas && !lib.job.running) { await checkLibrary(); return; }  // finished: recount
+    if (rbt.info && (document.getElementById('toolsPanel') || [...mounts.values()].some(p => p.includes('rb')))) {
+      try { const r = await H.api('/api/rekordbox/running'); rbt.info.running = r.running; rbt.info.lock = r.lock; } catch (e) {}
+    }
+    await loadTags();
+    if (document.getElementById('toolsPanel') || (st.info && st.info.job.running)) await loadStream();
+  }, busy ? 1500 : 5000);
 }
-function renderLib() {
-  const j = lib.job || {};
-  libBtn.hidden = false;
-  libBtn.textContent = libLabel();
-  libBtn.classList.toggle('busy', !!j.running);
-  libBtn.classList.toggle('todo', !!j.running || todo() > 0 || j.code === 0);
-  const panel = document.getElementById('libPanel');
-  if (panel) panel.innerHTML = libPanelHTML();
+const stageLabel = j => H.t('upd.' + j.stage) + (j.progress ? ` ${j.progress[0]}/${j.progress[1]}` : '');
+function toolsLabel() {
+  if (lib.job && lib.job.running) return stageLabel(lib.job);
+  if (tg.info && tg.info.job.running) return stageLabel(tg.info.job);
+  if (libDone() || tagDone()) return H.t('libUpdated');
+  if (todo()) return lib.counts.unanalyzed + lib.counts.unplaced ? H.t('libTodo', { n: todo() }) : H.t('libNewFiles', { n: todo() });
+  return '';  // nothing to do: the icon alone
 }
-function libPanelHTML() {
+function renderTools() {
+  const busy = (lib.job && lib.job.running) || (tg.info && tg.info.job.running) || (st.info && st.info.job.running);
+  document.getElementById('toolsTxt').textContent = toolsLabel();
+  toolsBtn.classList.toggle('busy', !!busy);
+  toolsBtn.classList.toggle('todo', !!busy || todo() > 0 || libDone() || tagDone());
+  renderMounts();
+}
+function jobHTML(j, kind) {
+  const pct = j.progress && j.progress[1] ? (j.progress[0] / j.progress[1]) * 100 : 0;
+  return `<div class="kicker">${H.esc(stageLabel(j))}</div><div class="meter"><div class="track"><b style="width:${pct}%"></b></div></div>
+    <div class="actions"><button class="danger" data-tool="${kind}-stop">${H.t('stop')}</button></div><p class="hint">${H.t('updStopHint')}</p>`;
+}
+const logHTML = j => (j.log && j.log.length && (j.running || (j.code && !j.stopped)) ? `<div class="log">${H.esc(j.log.join('\n'))}</div>` : '');
+function libHTML() {
   const j = lib.job || {}, c = lib.counts || { new: 0, unanalyzed: 0, unplaced: 0, failed: 0 };
   const row = (k, n) => `<div class="count${n ? '' : ' zero'}"><span>${H.t(k)}</span><b>${n.toLocaleString()}</b></div>`;
-  let h = `<div class="mhead">${H.t('library')}</div>`;
-  if (j.running) {
-    const pct = j.progress && j.progress[1] ? (j.progress[0] / j.progress[1]) * 100 : 0;
-    h += `<div class="kicker">${H.esc(libLabel())}</div><div class="meter"><div class="track"><b style="width:${pct}%"></b></div></div>
-      <div class="actions"><button class="danger" data-lib="stop">${H.t('stop')}</button></div><p class="hint">${H.t('updStopHint')}</p>`;
-  } else {
+  let h = '';
+  if (j.running) h += jobHTML(j, 'lib');
+  else {
     h += row('libNew', c.new) + row('libUnanalyzed', c.unanalyzed) + row('libUnplaced', c.unplaced) + (c.failed ? row('libFailed', c.failed) : '');
-    if (j.code === 0) h += `<p class="hint">${H.t('updDone')}</p><div class="actions"><button class="primary" data-lib="reload">${H.t('reload')}</button></div>`;
-    else if (j.code != null && !j.stopped) h += `<p class="hint" style="color:var(--magenta)">${H.t('updFailed')}</p>`;
-    else if (j.stopped) h += `<p class="hint">${H.t('updStopped')}</p>`;
-    h += `<div class="actions"><button class="${j.code === 0 ? '' : 'primary'}" data-lib="start" ${todo() ? '' : 'disabled'}>${H.t('updStart', { n: todo() })}</button>
-      <button class="ghost" data-lib="recheck">${H.t('recheck')}</button></div><p class="hint">${H.t('updHint')}</p>`;
+    if (libDone()) h += `<p class="hint okmsg">${H.t('updDone')}</p>`;
+    else if (lib.sawRun && j.code != null && j.code !== 0 && !j.stopped) h += `<p class="hint errmsg">${H.t('updFailed')}</p>`;
+    else if (lib.sawRun && j.stopped) h += `<p class="hint">${H.t('updStopped')}</p>`;
+    h += `<div class="actions"><button class="primary" data-tool="lib-start" ${todo() ? '' : 'disabled'}>${H.t('updStart', { n: todo() })}</button>
+      <button class="ghost" data-tool="lib-recheck">${H.t('recheck')}</button>${libDone() ? `<button data-tool="reload">${H.t('reload')}</button>` : ''}</div><p class="hint">${H.t('updHint')}</p>`;
   }
-  if (j.log && j.log.length && (j.running || (j.code && !j.stopped))) h += `<div class="log">${H.esc(j.log.join('\n'))}</div>`;
-  return h;
+  return h + logHTML(j);
 }
-libBtn.onclick = () => {
-  const old = document.getElementById('libPanel');
-  if (old) { old.close(); return; }
-  const m = document.createElement('div');
-  m.id = 'libPanel'; m.className = 'menu'; m.innerHTML = libPanelHTML();
-  document.body.appendChild(m);
-  const r = libBtn.getBoundingClientRect();
-  m.style.left = Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8)) + 'px'; m.style.top = r.bottom + 6 + 'px';
-  const outside = e => { if (!m.contains(e.target) && !libBtn.contains(e.target)) m.close(); };
-  const elsewhere = d => { if (d !== document) m.close(); };  // a click inside a mode frame
-  m.close = () => { m.remove(); document.removeEventListener('mousedown', outside, true); H.off('mousedown', elsewhere); };
-  document.addEventListener('mousedown', outside, true); H.on('mousedown', elsewhere);
-  m.onclick = async e => {
-    const b = e.target.closest('[data-lib]'); if (!b) return;
-    try {
-      if (b.dataset.lib === 'start') { lib.job = await H.update.start(); renderLib(); pollJob(); }
-      if (b.dataset.lib === 'stop') { lib.job = await H.update.stop(); renderLib(); }
-      if (b.dataset.lib === 'recheck') { b.disabled = true; await checkLibrary(); }
-      if (b.dataset.lib === 'reload') location.reload();
-    } catch (err) { H.toast(err.message); }
+function tagsHTML() {
+  const d = tg.info;
+  if (!d) return `<div class="hint">…</div>`;
+  const j = d.job;
+  const look = (name, l) => {
+    const found = Object.entries(l.matches).filter(([m]) => m !== 'none').reduce((a, [, c]) => a + c, 0);
+    const parts = Object.entries(l.matches).map(([m, c]) => `${H.t('match.' + m)} ${nf(c)}`).join(' · ');
+    return `<div><b>${name}</b> ${H.t('set.lookedUp', { d: nf(l.done), t: nf(d.total), m: nf(found) })}${parts ? `<br><span class="small">${parts}</span>` : ''}
+      · ${l.key ? H.t('set.toGo', { n: nf(l.pending) }) : `<span class="errmsg">${H.t('set.noKey')}</span>`}</div>`;
+  };
+  const axes = Object.entries(d.axes).map(([cat, by]) => `<div><b>${H.esc(H.t('cat.' + cat))}</b> ${
+    Object.keys(by).length ? Object.entries(by).map(([src, c]) => `${nf(c)} ${H.t('src.' + src)}`).join(' · ') : '—'}</div>`).join('');
+  let h = `<div class="cov">${look('Discogs', d.lookups.discogs)}${look('Last.fm', d.lookups.lastfm)}<div style="margin-top:6px">${axes}</div></div>`;
+  const pending = Math.max(d.lookups.discogs.key ? d.lookups.discogs.pending : 0, d.lookups.lastfm.key ? d.lookups.lastfm.pending : 0);
+  if (j.running) h += jobHTML(j, 'tags');
+  else {
+    h += `<div class="actions"><button class="primary" data-tool="tags-start" ${pending ? '' : 'disabled'}>${H.t('set.lookup', { n: nf(pending) })}</button>
+      <button data-tool="tags-resolve">${H.t('set.resolve')}</button>${tagDone() || tg.msg ? `<button data-tool="reload">${H.t('reload')}</button>` : ''}</div>
+      <p class="hint">${tg.msg ? `<span class="okmsg">${H.esc(tg.msg)}</span> ` : tagDone() ? `<span class="okmsg">${H.t('set.tagDone')}</span> ` : ''}${H.t('set.tagHint')}</p>`;
+    if (tg.sawRun && j.code && !j.stopped) h += `<p class="hint errmsg">${H.t('updFailed')}</p>`;
+  }
+  return h + logHTML(j);
+}
+async function loadStream() {
+  try { st.info = await H.api('/api/stream/info'); } catch (e) { return; }
+  renderTools(); schedule();
+}
+function streamHTML() {
+  const d = st.info; if (!d) return `<div class="hint">…</div>`;
+  const c = d.coverage, pct = q => (c[q].total ? Math.floor((c[q].ready / c[q].total) * 100) : 100);
+  const cov = `<div class="count${c.low.ready < c.low.total ? '' : ' zero'}"><span>${H.t('st.low')}</span><b>${nf(c.low.ready)} / ${nf(c.low.total)} · ${pct('low')}%</b></div>
+    <div class="count${c.high.ready < c.high.total ? '' : ' zero'}"><span>${H.t('st.high')}</span><b>${nf(c.high.ready)} / ${nf(c.high.total)} · ${pct('high')}%</b></div>`;
+  const todo = c.low.total - c.low.ready + c.high.total - c.high.ready;
+  const job = d.job.running ? jobHTML(d.job, 'st') : `<div class="actions"><button class="primary" data-tool="st-start" ${todo ? '' : 'disabled'}>${H.t('st.run', { n: nf(todo) })}</button></div>`;
+  const aw = d.awake;
+  const awake = `<div class="rblock ${aw.keep_awake ? 'on' : 'off'}"><span>${aw.keep_awake ? H.t(aw.active ? 'st.awakeOn' : 'st.awakeFail') : H.t('st.awakeOff')}</span>
+    <button class="small" data-tool="st-awake" data-on="${aw.keep_awake ? 0 : 1}">${H.t(aw.keep_awake ? 'set.off' : 'set.on')}</button></div>`;
+  const ts = d.tailscale;
+  const peer = p => `<div class="count"><span>${H.esc(p.name)}</span><b class="${!p.online ? '' : p.direct ? 'okmsg' : 'errmsg'}">${
+    !p.online ? H.t('st.offline') : p.direct ? H.t('st.direct') : H.t('st.relay', { r: p.relay || '?' })}</b></div>`;
+  const tsHTML = !ts.installed ? `<p class="hint">${H.t('st.noTs')}</p>` : ts.peers.length ? ts.peers.map(peer).join('') +
+    (ts.peers.some(p => p.online && !p.direct) ? `<p class="hint errmsg">${H.t('st.relayHint')}</p>` : '') : `<p class="hint">${H.t('st.noPhone')}</p>`;
+  return `<div class="cov">${cov}</div>${job}<p class="hint">${H.t('st.hint')}</p>${logHTML(d.job)}
+    <details open><summary>${H.t('st.path')}</summary>${awake}<p class="hint">${H.t('st.awakeHint')}</p>${tsHTML}</details>`;
+}
+async function loadRb() {
+  try { rbt.info = await H.api('/api/rekordbox/tags'); } catch (e) { rbt.info = null; rbt.msg = e.message; rbt.err = true; }
+  renderTools();
+}
+function rbHTML() {
+  const d = rbt.info, msg = rbt.msg ? `<p class="hint ${rbt.err ? 'errmsg' : 'okmsg'}">${H.esc(rbt.msg)}</p>` : '';
+  if (!d) return msg || `<div class="hint">…</div>`;
+  const pl = d.plan;
+  const cats = Object.entries(pl.cats).map(([c, v]) => `<details class="rbcat"><summary><b>${H.esc(c)}</b> ${H.t('rbt.tracks', { n: nf(v.confirmed + v.likely) })}
+      <span class="small">(${H.t('rbt.conf', { n: nf(v.confirmed) })} · ${H.t('rbt.likelyN', { n: nf(v.likely) })}) · ${H.t('rbt.tagsN', { n: v.tags.length })}</span></summary>
+      <div class="small">${v.tags.map(([g, n]) => `${H.esc(g)} ${nf(n)}`).join(' · ') || '—'}</div></details>`).join('');
+  const cur = d.current ? `<div><b>${H.t('rbt.now')}</b> ${d.current.cats.map(c => `${H.esc(c.name)} (${c.tags})`).join(' · ') || '—'} · ${H.t('rbt.links', { n: nf(d.current.links) })}</div>` : '';
+  const last = d.last ? `<div class="small">${H.t('rbt.last', { d: new Date(d.last.at * 1000).toLocaleString() })}</div>` : '';
+  const err = d.error ? `<p class="hint errmsg">${H.esc(d.error)}</p>` : '';
+  const run = d.running ? `<p class="hint errmsg">${H.t('rbt.running')}</p>` : '';
+  const lk = d.lock, isLocked = lk.locked;
+  const lockRow = `<div class="rblock ${isLocked ? 'on' : 'off'}"><span>${isLocked ? H.t('rbl.locked') : lk.once ? H.t('rbl.once') : H.t('rbl.open')}</span>
+    ${isLocked ? `<button class="small" data-tool="rb-unlock-once">${H.t('rbl.unlockOnce')}</button><button class="small ghost" data-tool="rb-unlock">${H.t('rbl.unlock')}</button>`
+      : `<button class="small primary" data-tool="rb-lock">${H.t('rbl.lock')}</button>`}</div><p class="hint">${H.t('rbl.hint')}</p>`;
+  const blk = lk.blocked.length ? `<details><summary>${H.t('rbl.blocked', { n: lk.blocked.length })}</summary>${lk.blocked.map(b =>
+    `<div class="small">${new Date(b.at * 1000).toLocaleString()} · ${H.esc(b.action)} <span class="muted">(${H.esc(b.caller)})</span></div>`).join('')}</details>` : '';
+  const bk = d.backups.length ? `<details><summary>${H.t('rbt.backups')} (${d.backups.length})</summary>${d.backups.map(b =>
+    `<div class="count"><span>${H.esc(b.stamp)} <span class="small">${H.esc(b.note || '')}</span></span><button class="small ghost" data-tool="rb-restore" data-stamp="${H.esc(b.stamp)}" ${d.running || d.lock.locked ? 'disabled' : ''}>${H.t('rbt.restore')}</button></div>`).join('')}</details>` : '';
+  return `${lockRow}<div class="cov"><div><b>${H.t('rbt.will')}</b> ${H.t('rbt.tracks', { n: nf(pl.tracks) })}${pl.in_rekordbox != null ? ` · ${H.t('rbt.inRb', { n: nf(pl.in_rekordbox), t: nf(pl.tracks) })}` : ''}</div>${cats}${cur}${last}</div>
+    ${err}${run}${isLocked ? `<p class="hint">${H.t('rbl.needUnlock')}</p>` : ''}<div class="actions"><button class="primary" data-tool="rb-send" ${d.running || d.error || isLocked ? 'disabled' : ''}>${H.t('rbt.send')}</button></div>
+    ${msg}<p class="hint">${H.t('rbt.hint', { m: d.min_train, p: Math.round(d.likely * 100) })}</p>${bk}${blk}`;
+}
+// ---- The sections, mounted in the tools popup: H.toolsMount(el, ['lib', 'tags', 'rb']) ----
+const mounts = new Map();  // element → parts
+const PART = { lib: libHTML, stream: streamHTML, tags: tagsHTML, rb: rbHTML };
+const partStat = k => {  // ✓ done · a count still to do · … running · ! needs you
+  const s = H.toolsStatus();
+  if (k === 'lib') return lib.job && lib.job.running ? '…' : s.libTodo ? nf(s.libTodo) : lib.counts ? '✓' : '';
+  if (k === 'tags') return !tg.info ? '' : tg.info.job.running ? '…' : s.noKeys ? '!' : s.lookPending ? nf(s.lookPending) : '✓';
+  if (k === 'stream') { if (!st.info) return ''; const c = st.info.coverage, n = c.low.total - c.low.ready + c.high.total - c.high.ready;
+    return st.info.job.running ? '…' : n ? nf(n) : st.info.tailscale.peers.some(p => p.online && !p.direct) ? '!' : '✓'; }
+  if (k === 'rb') return !rbt.info ? '' : rbt.info.lock.locked ? '🔒' : '🔓';
+  return '';
+};
+function renderMounts() {
+  for (const [el, parts] of mounts) {
+    if (!el.isConnected) { mounts.delete(el); continue; }
+    for (const k of parts) {
+      const box = el.querySelector(`[data-part="${k}"]`), h = PART[k]();
+      if (box.dataset.h !== h) { box.innerHTML = h; box.dataset.h = h; }  // unchanged: leave open <details> open
+      const st = el.querySelector(`[data-stat="${k}"]`), v = partStat(k);
+      st.textContent = v; st.className = 'pstat ' + (v === '✓' ? 'done' : v === '…' ? 'busy' : v === '!' ? 'warn' : v ? 'todo' : '');
+    }
+    if (parts.includes('tags') && tg.info) {
+      const ks = k => (k ? `<span class="okmsg">${H.t('set.keySet')}</span>` : `<span class="errmsg">${H.t('set.keyMissing')}</span>`);
+      el.querySelector('#kDiscogsSt').innerHTML = ks(tg.info.lookups.discogs.key);
+      el.querySelector('#kLastfmSt').innerHTML = ks(tg.info.lookups.lastfm.key);
+    }
+  }
+}
+H.toolsMount = (el, parts) => {
+  el.classList.add('toolsbox');
+  el.innerHTML = parts.map(k => `<section class="card tpart"><header><span class="pstat" data-stat="${k}"></span><b>${H.t('part.' + k)}</b>
+    <span class="hint">${H.t('part.' + k + '.sub')}</span></header><div data-part="${k}"></div>${k === 'tags' ? keysHTML() : ''}</section>`).join('');
+  el.onclick = e => toolAct(e, el);
+  mounts.set(el, parts);
+  if (parts.includes('lib')) checkLibrary();
+  if (parts.includes('tags')) loadTags();
+  if (parts.includes('rb')) loadRb();
+  if (parts.includes('stream')) loadStream();
+  renderMounts();
+  return () => mounts.delete(el);
+};
+// Statuses for the section headers, from what this page already polls.
+H.toolsStatus = () => {
+  const L = tg.info && tg.info.lookups;
+  return {
+    libTodo: todo(), libBusy: !!(lib.job && lib.job.running),
+    lookPending: L ? Math.max(L.discogs.key ? L.discogs.pending : 0, L.lastfm.key ? L.lastfm.pending : 0) : null,
+    noKeys: !!(L && !L.discogs.key && !L.lastfm.key), tagsBusy: !!(tg.info && tg.info.job.running),
+    rb: rbt.info ? { last: rbt.info.last, locked: rbt.info.lock.locked, tracks: rbt.info.plan.tracks } : null,
   };
 };
+H.toolsRefresh = () => { checkLibrary(); loadTags(); loadRb(); loadStream(); };
+function keysHTML() {  // rendered once per open, so polling never wipes what's being typed
+  return `<details><summary>${H.t('tools.keys')} · Discogs <span id="kDiscogsSt"></span> · Last.fm <span id="kLastfmSt"></span></summary>
+    <label class="field"><span>Discogs</span><input id="kDiscogs" type="password" autocomplete="off" spellcheck="false" placeholder="${H.esc(H.t('set.keyPh'))}"><small>${H.t('set.discogsHow')}</small></label>
+    <label class="field"><span>Last.fm</span><input id="kLastfm" type="password" autocomplete="off" spellcheck="false" placeholder="${H.esc(H.t('set.keyPh'))}"><small>${H.t('set.lastfmHow')}</small></label>
+    <div class="actions"><button data-tool="keys-save">${H.t('set.keySave')}</button><span class="small" id="kRes" style="align-self:center"></span></div></details>`;
+}
+// Reload when the UI code changes (summit reload, or a server restart): see ui.py. The window reports the revision it
+// has loaded so `summit reload` can confirm it took.
+(() => {
+  const win = Math.random().toString(36).slice(2, 10);
+  let have = '';
+  const tick = async () => {
+    try {
+      const r = await (await fetch(`/api/ui/rev?have=${encodeURIComponent(have)}&win=${win}`)).json();
+      if (!have) have = r.rev;
+      else if (r.rev !== have) { location.reload(); return; }
+    } catch (e) { /* server restarting: keep trying */ }
+    setTimeout(tick, 2000);
+  };
+  tick();
+})();
+toolsBtn.onclick = () => {
+  const old = document.getElementById('toolsPanel');
+  if (old) { old.close(); return; }
+  const m = document.createElement('div');
+  m.id = 'toolsPanel'; m.className = 'menu';
+  m.innerHTML = `<div class="mhead">${H.t('tools')}</div><div id="tParts"></div>`;
+  document.body.appendChild(m);
+  const unmount = H.toolsMount(m.querySelector('#tParts'), ['lib', 'stream', 'tags', 'rb']);
+  const r = toolsBtn.getBoundingClientRect();
+  m.style.left = Math.max(8, Math.min(r.right - m.offsetWidth, innerWidth - m.offsetWidth - 8)) + 'px'; m.style.top = r.bottom + 6 + 'px';
+  const outside = e => { if (!m.contains(e.target) && !toolsBtn.contains(e.target)) m.close(); };
+  const elsewhere = d => { if (d !== document) m.close(); };  // a click inside a mode frame
+  const esc = e => { if (e.key === 'Escape') { e.stopPropagation(); m.close(); } };
+  m.close = () => { unmount(); m.remove(); document.removeEventListener('mousedown', outside, true); document.removeEventListener('keydown', esc, true); H.off('mousedown', elsewhere); };
+  document.addEventListener('mousedown', outside, true); document.addEventListener('keydown', esc, true); H.on('mousedown', elsewhere);
+  renderTools(); schedule();
+};
+// Buttons in the tools sections, wherever they're shown (root: the popup or a mounted section).
+async function toolAct(e, root) {
+  {
+    const b = e.target.closest('[data-tool]'); if (!b) return;
+    const a = b.dataset.tool;
+    try {
+      if (a === 'lib-start') { lib.job = await H.update.start(); lib.sawRun = true; renderTools(); schedule(); }
+      if (a === 'lib-stop') { lib.job = await H.update.stop(); renderTools(); }
+      if (a === 'lib-recheck') { b.disabled = true; await checkLibrary(); }
+      if (a === 'tags-start') { tg.msg = ''; tg.info.job = await H.api('/api/tags/run', 'POST'); tg.sawRun = true; renderTools(); schedule(); }
+      if (a === 'tags-stop') { tg.info.job = await H.api('/api/tags/run', 'DELETE'); renderTools(); }
+      if (a === 'tags-resolve') {
+        b.disabled = true;
+        const res = await H.api('/api/tags/resolve', 'POST');
+        tg.msg = H.t('set.resolved', { g: nf(res.genre_confirmed), b: nf(res.beat_confirmed) }) + ' ' + H.t('set.tagDone');
+        await loadTags();
+      }
+      if (a === 'keys-save') {
+        const body = {}, dv = root.querySelector('#kDiscogs').value.trim(), lv = root.querySelector('#kLastfm').value.trim();
+        if (dv) body.discogs = dv;
+        if (lv) body.lastfm = lv;
+        if (!Object.keys(body).length) return;
+        b.disabled = true; root.querySelector('#kRes').textContent = '…';
+        const res = await H.api('/api/tags/keys', 'POST', body), name = { discogs: 'Discogs', lastfm: 'Last.fm' };
+        root.querySelector('#kRes').innerHTML = Object.entries(res).map(([k, v]) => v.ok ? `<span class="okmsg">${H.t('set.keyOk', { x: name[k] })}</span>`
+          : `<span class="errmsg">${H.esc(H.t('set.keyBad', { x: name[k], e: v.error }))}</span>`).join(' · ');
+        root.querySelector('#kDiscogs').value = ''; root.querySelector('#kLastfm').value = ''; b.disabled = false;
+        await loadTags();
+      }
+      if (a === 'st-start') { st.info.job = await H.api('/api/stream/run', 'POST'); renderTools(); schedule(); }
+      if (a === 'st-stop') { st.info.job = await H.api('/api/stream/run', 'DELETE'); renderTools(); }
+      if (a === 'st-awake') { st.info.awake = await H.api('/api/stream/awake', 'POST', { on: b.dataset.on === '1' }); renderTools(); }
+      if (a === 'rb-send') {
+        if (!confirm(H.t('rbt.confirm'))) return;
+        b.disabled = true; b.textContent = '…'; rbt.msg = '';
+        const r = await H.api('/api/rekordbox/tags/sync', 'POST');
+        rbt.err = false;
+        rbt.msg = r.noop ? H.t('rbl.noop') : r.unchanged ? H.t('rbt.same') : H.t('rbt.done', { a: nf(r.links_added), r: nf(r.links_removed), t: nf(r.tracks) });
+        await loadRb();
+      }
+      if (a === 'rb-restore') {
+        const st = b.dataset.stamp;
+        if (!confirm(H.t('rbt.restoreQ', { s: st }))) return;
+        b.disabled = true;
+        const r = await H.api('/api/rekordbox/tags/restore', 'POST', { stamp: st });
+        rbt.err = false; rbt.msg = r.noop ? H.t('rbl.noop') : H.t('rbt.restored', { s: st });
+        await loadRb();
+      }
+      if (a === 'rb-lock' || a === 'rb-unlock' || a === 'rb-unlock-once') {
+        if (a === 'rb-unlock' && !confirm(H.t('rbl.unlockQ'))) return;
+        rbt.info.lock = { ...rbt.info.lock, ...(await H.api('/api/rekordbox/lock', 'POST', { locked: a === 'rb-lock', once: a === 'rb-unlock-once' })) };
+        rbt.msg = ''; renderTools();
+      }
+      if (a === 'reload') location.reload();
+    } catch (err) { H.toast(err.message); b.disabled = false; if (a.startsWith('rb-')) { rbt.msg = /: 423$/.test(err.message) ? H.t('rbt.running') : err.message; rbt.err = true; loadRb(); } }
+  }
+}
+loadTags();
 </script>
 </body>
 </html>

@@ -218,7 +218,7 @@ class Repo(private val ctx: Context, val api: Api, private val scope: CoroutineS
     suspend fun suggest(p: Playlist, k: Int = 20): List<Int> = runCatching { api.suggest(p.ids, k, space.value) }.getOrElse { emptyList() }
     /** Tracks that sound like [q], by sound alone (name matches are listed separately). */
     suspend fun vibeSearch(q: String, n: Int): List<Int> = runCatching { api.search(q, n, mode = "vibe").map { it.i } }.getOrElse { emptyList() }
-    fun prefetch(ids: List<String>) { if (ids.isNotEmpty()) scope.launch { runCatching { api.prefetch(ids) } } }
+    fun prefetch(ids: List<String>, q: String = "high") { if (ids.isNotEmpty()) scope.launch { runCatching { api.prefetch(ids, q) } } }
 
     private suspend fun <T> guard(block: suspend () -> T): T? = try { block() } catch (e: Exception) { say("Couldn't reach Summit: ${e.message}"); null }
 
