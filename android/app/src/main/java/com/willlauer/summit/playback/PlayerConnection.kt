@@ -47,6 +47,7 @@ class PlayerConnection(private val ctx: Context, private val repo: Repo, private
             mc.addListener(object : Player.Listener {
                 override fun onEvents(player: Player, events: Player.Events) { publish() }
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) { save(); prefetchAhead() }
+                override fun onIsPlayingChanged(isPlaying: Boolean) { save() }  // where to resume (hardware play button, PlaybackService)
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                     repo.say("Couldn't play this track (${error.errorCodeName})")
                     if (mc.hasNextMediaItem()) { mc.seekToNextMediaItem(); mc.prepare(); mc.play() }
@@ -57,7 +58,7 @@ class PlayerConnection(private val ctx: Context, private val repo: Repo, private
         }, ContextCompat.getMainExecutor(ctx))
     }
 
-    private fun item(i: Int): MediaItem? {
+    fun item(i: Int): MediaItem? {
         val t = repo.lib.value?.tracks?.getOrNull(i) ?: return null
         return MediaItem.Builder().setMediaId(t.id).setUri(repo.api.streamUrl(t.id))
             .setMediaMetadata(MediaMetadata.Builder().setTitle(t.name).setArtist(t.by).setAlbumTitle(t.album)
@@ -130,11 +131,20 @@ class PlayerConnection(private val ctx: Context, private val repo: Repo, private
     private fun save() {
         val mc = c ?: return
         val ids = (0 until mc.mediaItemCount).map { mc.getMediaItemAt(it).mediaId }
-        prefs.edit().putString("ids", ids.joinToString(",")).putInt("index", mc.currentMediaItemIndex).putString("label", label)
+        prefs.edit().putString("ids", ids.joinToString(",")).putInt("index", mc.currentMediaItemIndex).putString("label", label).putLong("pos", mc.currentPosition)
             .putBoolean("shuffle", mc.shuffleModeEnabled).apply()
     }
     /** The library arrived (it may load after the controller connects): restore the last queue, map ids to tracks. */
     fun onLibrary() { val mc = c ?: return; if (mc.mediaItemCount == 0) restore() else publish() }
+
+    /** The last queue, for resuming from a media button with the app closed: (items, index, position). */
+    fun resumable(): Triple<List<MediaItem>, Int, Long>? {
+        val L = repo.lib.value ?: return null
+        val ids = prefs.getString("ids", "")!!.split(",").filter { it.isNotEmpty() }
+        val items = ids.mapNotNull { L.byId[it] }.mapNotNull { item(it) }
+        if (items.isEmpty()) return null
+        return Triple(items, prefs.getInt("index", 0).coerceIn(0, items.size - 1), prefs.getLong("pos", 0))
+    }
 
     private fun restore() {
         val mc = c ?: return
@@ -143,7 +153,7 @@ class PlayerConnection(private val ctx: Context, private val repo: Repo, private
         val items = ids.mapNotNull { L.byId[it] }.mapNotNull { item(it) }
         if (items.isEmpty()) return
         mc.shuffleModeEnabled = prefs.getBoolean("shuffle", false)
-        mc.setMediaItems(items, prefs.getInt("index", 0).coerceIn(0, items.size - 1), 0)
+        mc.setMediaItems(items, prefs.getInt("index", 0).coerceIn(0, items.size - 1), prefs.getLong("pos", 0))
         mc.prepare()
         publish()
     }

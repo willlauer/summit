@@ -55,6 +55,16 @@
       <div class="actions"><button class="primary" id="save" data-i18n="save">Save</button><span class="muted small" id="saved" style="align-self:center"></span></div>
     </section>
 
+    <section class="frame synconly" id="sec-wifi">
+      <div class="panel-head"><h2 data-i18n="set.wifi">Wi-Fi sync</h2><span class="muted small" data-i18n="set.wifiSub">Phone and JM21 on the same Wi-Fi, no Tailscale</span></div>
+      <div class="opt"><div class="what"><b data-i18n="set.wifiOn">Let devices on this Wi-Fi sync</b><span id="wifiWhere" class="muted small"></span></div>
+        <span class="seg" id="wifiSeg"><button data-v="0" data-i18n="set.off">Off</button><button data-v="1" data-i18n="set.on">On</button></span></div>
+      <div class="opt"><div class="what"><b data-i18n="set.wifiCode">Pairing code</b><span class="muted small" data-i18n="set.wifiCodeSub">Enter it in the app: Settings › Wi-Fi sync › Pair</span></div>
+        <span><b id="wifiCode" style="font: 600 22px var(--mono); letter-spacing: .2em; color: var(--hi)"></b> <button class="ghost small" id="wifiNew" data-i18n="set.wifiNew">New code</button></span></div>
+      <ul class="pllist" id="wifiDevs" style="list-style:none;padding:0;margin:8px 0 0"></ul>
+      <p class="muted small" id="wifiApk" style="margin:8px 0 0"></p>
+    </section>
+
     <section class="frame" id="sec-about">
       <div class="panel-head"><h2 data-i18n="set.about">About</h2></div>
       <div class="deps" id="about"></div>
@@ -103,6 +113,25 @@ $('#save').onclick = async () => {
   } catch (err) { S.toast(err.message); }
 };
 
+// ---- Wi-Fi sync (lan.py) ----
+async function loadWifi() {
+  const r = await fetch('/api/lan/info'); if (!r.ok) return;
+  const w = await r.json(), when = ts => ts ? new Date(ts * 1000).toLocaleString() : '—';
+  document.querySelectorAll('#wifiSeg button').forEach(b => b.classList.toggle('on', (b.dataset.v === '1') === w.enabled));
+  $('#wifiCode').textContent = w.enabled ? w.code : '—';
+  $('#wifiWhere').textContent = w.enabled ? t_('set.wifiWhere', { n: w.name, a: (w.addresses.join(', ') || '?') + ':' + w.port }) : '';
+  $('#wifiDevs').innerHTML = w.devices.map(d => `<li style="display:flex;gap:10px;align-items:center;padding:5px 0;border-top:1px solid var(--line-soft)">
+      <span style="flex:1">${S.esc(d.name)}</span><span class="muted small">${t_('set.wifiSeen', { t: when(d.seen) })}</span>
+      <button class="ghost small" data-forget="${S.esc(d.id)}">${t_('set.wifiForget')}</button></li>`).join('')
+    || `<li class="muted small">${t_('set.wifiNone')}</li>`;
+  $('#wifiApk').textContent = w.apk ? t_('set.wifiApk', { v: w.apk.versionName, t: when(w.apk.built) }) : '';
+}
+const wifiPost = body => fetch('/api/lan/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(loadWifi);
+$('#wifiSeg').onclick = e => { const b = e.target.closest('button'); if (b) wifiPost({ enabled: b.dataset.v === '1' }); };
+$('#wifiNew').onclick = () => wifiPost({ new_code: true });
+$('#wifiDevs').onclick = e => { const b = e.target.closest('[data-forget]'); if (b) fetch('/api/lan/devices/' + b.dataset.forget, { method: 'DELETE' }).then(loadWifi); };
+setInterval(() => { if (H.mode === 'settings' && !document.hidden) loadWifi(); }, 10000);
+
 async function about() {
   const v = await H.api('/api/version').catch(() => ({ version: '?' })), rb = S.data.rekordbox || {};
   const win = await Promise.resolve(window.top.pywebview?.api?.app?.()).catch(() => null);  // the Windows app (windows/)
@@ -112,13 +141,13 @@ async function about() {
 }
 
 S.ready.then(() => {
-  toggles(); loadDevices(); about();
+  toggles(); loadDevices(); loadWifi(); about();
   H.registerView('settings', {
     save: () => ({}), load() {},
     focus(section) { const el = document.getElementById('sec-' + section); if (el) el.scrollIntoView({ block: 'start' }); },
   });
 });
-H.on('lang', () => { toggles(); if (cfg) loadDevices(); about(); });
+H.on('lang', () => { toggles(); if (cfg) loadDevices(); loadWifi(); about(); });
 H.on('look', toggles);
 </script>
 </body>

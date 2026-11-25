@@ -74,7 +74,7 @@
 const H = S.H, t_ = H.t, $ = s => document.querySelector(s);
 const st = {
   device: null, devices: [], library: null, libError: '', config: null,
-  selected: new Set(), filter: '', source: 'all', contents: {}, job: null, lastPlanArgs: null, unavailable: false,
+  picks: { garmin: new Set(), fiio: new Set() }, fiioAll: true, scope: 'library', filter: '', source: 'all', contents: {}, job: null, lastPlanArgs: null, unavailable: false,
 };
 try { st.device = localStorage.getItem('summit.sync.device'); } catch (e) {}
 
@@ -111,10 +111,11 @@ function renderLibLine() {
   const el = $('#libline'), L = st.library;
   el.classList.toggle('err', !L);
   if (!L) { el.textContent = st.libError; el.title = st.libError; return; }
-  const nS = L.playlists.filter(p => p.source === 'summit').length, rb = L.rekordbox;
+  const nS = L.playlists.filter(p => p.source === 'summit').length, rb = L.rekordbox, it = L.itunes || {};
   const rbText = rb.error ? t_('sy.rbMissing') : t_('sy.rbLine', { p: rb.path.replace(/^\/Users\/[^/]+/, '~'), a: ago(rb.mtime), n: rb.playlists });
-  el.textContent = `${t_('sy.summitLine', { n: nS })} · ${rbText} · ${t_('sy.syncable', { n: num(L.tracks) })}`;
-  el.title = rb.error || el.textContent;
+  const itText = it.error ? it.error : t_('sy.itLine', { n: it.playlists || 0 });
+  el.textContent = `${t_('sy.summitLine', { n: nS })} · ${rbText} · ${itText} · ${t_('sy.syncable', { n: num(L.tracks) })}`;
+  el.title = [rb.error, it.error].filter(Boolean).join('\n') || el.textContent;
 }
 
 // ---- devices ----
@@ -171,7 +172,7 @@ function renderDeviceHead() {
   const busy = st.job && st.job.status === 'running';
   $('#wipe').disabled = !d.connected || busy;
   $('#refresh').disabled = !d.connected || busy;
-  $('#preview').disabled = !d.connected || busy || !st.library || (d.id === 'garmin' && !st.selected.size);
+  $('#preview').disabled = !d.connected || busy || !st.library || ((d.id === 'garmin' || st.scope === 'playlists') && !sel().size);
 }
 
 async function readContents() {
@@ -194,62 +195,74 @@ function renderContents() {
     <ul class="pllist">${pls.map(p => `<li><span>${S.esc(p.name)}</span><span>${p.tracks == null ? '' : t_('nTracks', { n: p.tracks })}</span></li>`).join('') || `<li class="muted">${t_('sy.noPlaylists')}</li>`}</ul>`;
 }
 
-// ---- what to sync ----
+// ---- what to sync: one playlist list from every source, picked per device ----
+const sel = () => st.picks[st.device] || st.picks.garmin;
+const SOURCES = ['summit', 'rekordbox', 'itunes'];
 function renderSync() {
   const box = $('#syncBody'), L = st.library; if (!box) return;
   if (!L) { $('#syncTitle').textContent = t_('mode.sync'); box.innerHTML = `<p class="errmsg">${S.esc(st.libError || t_('sy.loading'))}</p>`; return renderDeviceHead(); }
-  if (st.device === 'fiio') {
-    $('#syncTitle').textContent = t_('sy.mirrorTitle');
+  const card = st.device === 'fiio';
+  if (card && st.fiioAll) { st.picks.fiio = new Set(L.playlists.filter(p => p.syncable).map(p => p.name)); }
+  let head = '';
+  if (card) {
     const skipped = [];
     if (L.streaming) skipped.push(t_('sy.skStreaming', { n: num(L.streaming) }));
     if (L.missing) skipped.push(t_('sy.skMissing', { n: num(L.missing) }));
     if (L.outside) skipped.push(t_('sy.skOutside', { n: num(L.outside) }));
-    const nS = L.playlists.filter(p => p.source === 'summit').length;
-    box.innerHTML = `<div class="stats"><div class="stat"><b>${num(L.mirror)}</b><span>${t_('tracks')}</span></div><div class="stat"><b>${human(L.mirror_bytes)}</b><span>${t_('sy.totalSize')}</span></div>
-        <div class="stat"><b>${L.playlists.length}</b><span>${t_('sy.m3u')}</span></div></div>
-      <ul class="notes"><li>${t_('sy.mirrorNote1')}</li><li>${t_('sy.mirrorNote2', { s: nS, r: L.rekordbox.playlists })}</li>${skipped.length ? `<li>${t_('sy.skipped', { x: skipped.join(', ') })}</li>` : ''}</ul>`;
-    $('#syncSummary').textContent = '';
-    return renderDeviceHead();
+    head = `<div class="pickbar"><span class="seg" id="scopeSeg">${['library', 'playlists'].map(k => `<button data-v="${k}" class="${st.scope === k ? 'on' : ''}">${t_('sy.scope.' + k)}</button>`).join('')}</span></div>
+      <p class="muted small" style="margin:0 0 6px">${st.scope === 'library' ? t_('sy.cardLib', { n: num(L.mirror), b: human(L.mirror_bytes) }) : t_('sy.cardPl')}</p>
+      <ul class="notes" style="margin:0 0 10px"><li>${t_('sy.cardNote')}</li>${skipped.length ? `<li>${t_('sy.skipped', { x: skipped.join(', ') })}</li>` : ''}</ul>
+      <h3 style="margin:10px 0 6px">${t_('sy.cardPick')}</h3>`;
   }
-  $('#syncTitle').textContent = t_('sy.pickTitle');
-  const onWatch = new Set(((st.contents.garmin || {}).playlists || []).map(p => p.library_name).filter(Boolean));
+  $('#syncTitle').textContent = t_(card ? 'sy.cardTitle' : 'sy.pickTitle');
+  const picks = sel();
+  const onWatch = new Set(card ? [] : ((st.contents.garmin || {}).playlists || []).map(p => p.library_name).filter(Boolean));
   const f = st.filter.toLowerCase();
   const rows = L.playlists.filter(p => (st.source === 'all' || p.source === st.source) && (!f || p.name.toLowerCase().includes(f)));
   const group = src => rows.filter(p => p.source === src).map(p => `
     <label class="pick${onWatch.has(p.name) ? ' on-device' : ''}" title="${S.esc(p.name)}${onWatch.has(p.name) ? ' · ' + t_('sy.onWatch') : ''}">
-      <input type="checkbox" data-name="${S.esc(p.name)}" ${st.selected.has(p.name) ? 'checked' : ''} ${p.syncable ? '' : 'disabled'}>
+      <input type="checkbox" data-name="${S.esc(p.name)}" ${picks.has(p.name) ? 'checked' : ''} ${p.syncable ? '' : 'disabled'}>
       <span class="nm">${S.esc(p.label || p.name)}</span><span class="ct">${p.syncable}${p.syncable !== p.count ? ` / ${p.count}` : ''} · ${human(p.bytes)}</span></label>`).join('');
-  const gS = group('summit'), gR = group('rekordbox');
-  box.innerHTML = `
+  const groups = SOURCES.map(src => {
+    const g = group(src);
+    if (g) return `<h3>${t_('sy.src.' + src)}</h3>${g}`;
+    if (src === 'itunes' && (st.source === 'all' || st.source === 'itunes') && !f && !(L.itunes || {}).error) return `<h3>${t_('sy.src.itunes')}</h3><p class="muted small" style="margin:2px 8px 8px">${t_('sy.itNone')}</p>`;
+    return '';
+  }).join('');
+  box.innerHTML = `${head}
     <div class="pickbar">
-      <span class="seg" id="srcSeg">${['all', 'summit', 'rekordbox'].map(k => `<button data-v="${k}" class="${st.source === k ? 'on' : ''}">${t_('sy.src.' + k)}</button>`).join('')}</span>
+      <span class="seg" id="srcSeg">${['all', ...SOURCES].map(k => `<button data-v="${k}" class="${st.source === k ? 'on' : ''}">${t_('sy.src.' + k)}</button>`).join('')}</span>
       <input id="plFilter" placeholder="${t_('sy.filterPh')}" value="${S.esc(st.filter)}">
       <button class="ghost small" id="selAll">${t_(f || st.source !== 'all' ? 'sy.selShown' : 'sy.selAll')}</button>
-      <button class="ghost small" id="selNone" ${st.selected.size ? '' : 'disabled'}>${t_('sy.selNone')}</button>
+      <button class="ghost small" id="selNone" ${picks.size ? '' : 'disabled'}>${t_('sy.selNone')}</button>
     </div>
-    <div class="picker">${gS ? `<h3>Summit</h3>${gS}` : ''}${gR ? `<h3>rekordbox</h3>${gR}` : ''}${gS || gR ? '' : `<div class="empty">${t_('noMatches')}</div>`}</div>`;
+    <div class="picker">${groups || `<div class="empty">${t_('noMatches')}</div>`}</div>`;
+  const changed = () => { if (card) st.fiioAll = L.playlists.every(p => !p.syncable || picks.has(p.name)); };
+  if ($('#scopeSeg')) $('#scopeSeg').onclick = e => { const b = e.target.closest('button'); if (b) { st.scope = b.dataset.v; renderSync(); } };
   $('#srcSeg').onclick = e => { const b = e.target.closest('button'); if (b) { st.source = b.dataset.v; renderSync(); } };
   const fi = $('#plFilter');
   fi.oninput = () => { st.filter = fi.value; renderSync(); const n = $('#plFilter'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
-  $('#selAll').onclick = () => { rows.forEach(p => p.syncable && st.selected.add(p.name)); renderSync(); };
-  $('#selNone').onclick = () => { st.selected.clear(); renderSync(); };
+  $('#selAll').onclick = () => { rows.forEach(p => p.syncable && picks.add(p.name)); changed(); renderSync(); };
+  $('#selNone').onclick = () => { if (f || st.source !== 'all') rows.forEach(p => picks.delete(p.name)); else picks.clear(); changed(); renderSync(); };
   box.querySelectorAll('input[type=checkbox]').forEach(cb => (cb.onchange = () => {
-    cb.checked ? st.selected.add(cb.dataset.name) : st.selected.delete(cb.dataset.name);
-    $('#selNone').disabled = !st.selected.size; selSummary();
+    cb.checked ? picks.add(cb.dataset.name) : picks.delete(cb.dataset.name);
+    changed(); $('#selNone').disabled = !picks.size; selSummary();
   }));
   selSummary();
 }
 function selSummary() {
-  const sel = st.library.playlists.filter(p => st.selected.has(p.name));
-  const n = sel.reduce((a, p) => a + p.syncable, 0), b = sel.reduce((a, p) => a + p.bytes, 0);
-  $('#syncSummary').textContent = sel.length ? t_('sy.selSummary', { p: sel.length, n: num(n), b: human(b) }) : t_('sy.pickOne');
+  const picks = sel(), chosen = st.library.playlists.filter(p => picks.has(p.name));
+  const n = chosen.reduce((a, p) => a + p.syncable, 0), b = chosen.reduce((a, p) => a + p.bytes, 0);
+  $('#syncSummary').textContent = chosen.length ? t_('sy.selSummary', { p: chosen.length, n: num(n), b: human(b) })
+    : st.device === 'fiio' && st.scope === 'library' ? '' : t_('sy.pickOne');
   renderDeviceHead();
 }
 
 // ---- preview / sync / delete everything ----
 // Keep the library's playlist order (Summit's, then rekordbox's) whatever order they were ticked in.
 const ordered = names => { const o = new Map(st.library.playlists.map((p, i) => [p.name, i])); return names.filter(n => o.has(n)).sort((a, b) => o.get(a) - o.get(b)); };
-const planArgs = () => (st.device === 'garmin' ? { playlists: ordered([...st.selected]) } : {});
+const planArgs = () => (st.device === 'garmin' ? { playlists: ordered([...st.picks.garmin]) }
+  : { playlists: st.fiioAll ? null : ordered([...st.picks.fiio]), scope: st.scope });
 async function preview() { st.lastPlanArgs = planArgs(); try { await startJob(`/plan/${st.device}`, st.lastPlanArgs); } catch (e) { S.toast(e.message); } }
 
 function showPlan(s) {
@@ -265,6 +278,7 @@ function showPlan(s) {
     if (s.playlists_delete) add(t_('sy.p.plRemove'), s.playlists_delete);
     if (s.unmanaged) add(t_('sy.p.unmanaged'), num(s.unmanaged));
   } else {
+    if (s.tracks != null) add(t_('sy.p.cardTracks'), num(s.tracks));
     add(t_('sy.p.unchanged'), num(s.unchanged));
     add(t_('sy.p.copy'), `${num(s.add)} · ${human(s.add_bytes)}`);
     add(t_('sy.p.delete'), `${num(s.delete)} · ${human(s.delete_bytes)}`);
@@ -345,7 +359,7 @@ function resultText(j) {
   const r = j.result, errs = r.errors ? t_('sy.r.errors', { n: r.errors }) : '';
   if (j.kind === 'wipe') return t_('sy.r.wipe', { n: num(r.deleted), f: human(r.free) });
   if (j.device === 'garmin') return t_('sy.r.garmin', { n: num(r.sent), b: human(r.sent_bytes), d: r.deleted, p: r.playlists, f: human(r.free) }) + errs;
-  return t_('sy.r.fiio', { n: num(r.copied), b: human(r.copied_bytes), d: r.deleted, p: r.playlists, f: human(r.free) }) + (r.renamed ? t_('sy.r.renamed', { n: r.renamed }) : '') + errs;
+  return t_('sy.r.fiio', { n: num(r.copied), b: human(r.copied_bytes), d: r.deleted, p: r.playlists, f: human(r.free) }) + (r.renamed ? t_('sy.r.renamed', { n: r.renamed }) : '') + (r.app_tracks ? t_('sy.r.app', { n: num(r.app_tracks) }) : '') + errs;
 }
 $('#jobCancel').onclick = () => api('/job/cancel', {}).catch(() => {});
 $('#jobClose').onclick = () => { $('#job').hidden = true; };
@@ -364,7 +378,13 @@ H.on('mode', m => { if (m === 'sync') { loadDevices(); if (st.stale) { st.stale 
 H.on('syncconfig', () => { loadConfig().then(() => { loadLibrary(true); loadDevices(); }); });
 H.on('lang', () => { renderLibLine(); renderDevices(); renderDevice(); renderJob(); });
 
-async function loadConfig() { st.config = await api('/config'); st.selected = new Set(st.config.garmin_playlists || []); }
+async function loadConfig() {
+  st.config = await api('/config');
+  st.picks.garmin = new Set(st.config.garmin_playlists || []);
+  st.fiioAll = st.config.fiio_playlists == null;
+  st.picks.fiio = new Set(st.config.fiio_playlists || []);
+  st.scope = st.config.fiio_scope || 'library';
+}
 
 (async function boot() {
   await loadConfig().catch(() => {});
@@ -377,14 +397,15 @@ async function loadConfig() { st.config = await api('/config'); st.selected = ne
   H.registerView('sync', {
     save: () => ({ device: st.device }),
     load(v) { if (v.device && v.device !== st.device) openDevice(v.device); },
-    // "Send to device" on a Summit playlist: tick it for the watch (the card gets every playlist anyway).
+    // "Send to device" on a Summit playlist: tick it for the device on screen (the watch if none).
     async preselect(pid) {
       if (!st.library) await loadLibrary(false);
       const p = st.library && st.library.playlists.find(x => x.source === 'summit' && x.id === pid);
       if (!p) { S.toast(t_('sy.notSyncable')); return; }
-      st.selected.add(p.name); st.source = 'summit'; st.filter = '';
-      if (st.device !== 'garmin') openDevice('garmin'); else renderSync();
-      S.toast(t_('sy.preselected', { x: p.label }));
+      const d = st.device === 'fiio' ? 'fiio' : 'garmin';
+      st.picks[d].add(p.name); st.source = 'summit'; st.filter = '';
+      if (st.device !== d) openDevice(d); else renderSync();
+      S.toast(t_('sy.preselected', { x: p.label, d: devName({ id: d }) }));
     },
   });
   // Hot-plug: re-check the devices every few seconds while this page is on screen.

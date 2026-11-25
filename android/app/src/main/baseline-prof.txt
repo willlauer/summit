@@ -1,0 +1,4 @@
+# Compile all of Summit's own code ahead of time (merged with Compose's own profiles into the release build's
+# baseline profile). Without it a fresh install runs in Android's interpreter and typing / scrolling lag on the JM21.
+HSPLcom/willlauer/summit/**->**(**)**
+Lcom/willlauer/summit/**;

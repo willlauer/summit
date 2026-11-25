@@ -159,7 +159,8 @@ fun PlaylistScreen(id: Int, bottomPad: Dp) {
                     Mosaic(p, 112.dp, corner = 14.dp)
                     Spacer(Modifier.width(16.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(p.name, style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        if (Neon) NeonTitle(p.name, Modifier.clickable(enabled = editable) { app.dialog = Dialog.Rename(p.id) }, MaterialTheme.typography.headlineSmall)
+                        else Text(p.name, style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.clickable(enabled = editable) { app.dialog = Dialog.Rename(p.id) })
                         Text("${order.size} songs · ${fmtLong(dur)}", style = MaterialTheme.typography.bodyMedium, color = C.Muted)
                         if (editable) {

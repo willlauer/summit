@@ -31,7 +31,8 @@ fun MiniPlayer() {
     val i = ps.current ?: return
     val t = lib.tracks[i]
     Column(
-        Modifier.padding(horizontal = 8.dp).fillMaxWidth().snowCap(1).clip(PxBig).background(C.Raised2.copy(alpha = .94f)).border(1.dp, C.Line, PxBig).clickable { app.nowPlaying = true }
+        Modifier.padding(horizontal = 8.dp).fillMaxWidth().snowCap(1).clip(PxBig).background(C.Raised2.copy(alpha = .94f))
+            .border(1.dp, if (Neon) Brush.horizontalGradient(listOf(C.Sign, C.Tube)) else androidx.compose.ui.graphics.SolidColor(C.Line), PxBig).clickable { app.nowPlaying = true }
             .pointerInput(Unit) { detectVerticalDragGestures { _, dy -> if (dy < -12) app.nowPlaying = true } },
     ) {
         Row(Modifier.padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -49,7 +50,7 @@ fun MiniPlayer() {
         }
         val f = if (ps.durationMs > 0) ps.positionMs.toFloat() / ps.durationMs else 0f
         Box(Modifier.padding(horizontal = 12.dp).fillMaxWidth().height(2.dp).clip(Pill).background(C.Line)) {
-            Box(Modifier.fillMaxWidth(f).fillMaxHeight().background(C.Cyan))
+            Box(Modifier.fillMaxWidth(f).fillMaxHeight().background(if (Neon) Brush.horizontalGradient(listOf(C.Sign, C.Tube)) else androidx.compose.ui.graphics.SolidColor(C.Cyan)))
         }
         Spacer(Modifier.height(4.dp))
     }
@@ -97,6 +98,8 @@ fun NowPlaying() {
                             Text(t.name, style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             Text(t.by, style = MaterialTheme.typography.bodyLarge, color = C.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.clickable { app.artist(com.willlauer.summit.data.splitArtists(t.by).firstOrNull() ?: t.by) })
+                            if (lib.hasAlbum(i)) Text(t.album!!, style = MaterialTheme.typography.bodySmall, color = C.Faint, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.clickable { app.album(t.album!!) })
                         }
                         val on = t.id in liked
                         IconButton(onClick = { app.repo.toggleLike(i) }) { LikeIcon(on, 30.dp) }

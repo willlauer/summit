@@ -1,4 +1,5 @@
-"""What device sync can send: Summit's playlists (and Liked) plus, when there is one, the rekordbox collection export.
+"""What device sync can send: Summit's library and playlists (and Liked), the rekordbox collection export when there is
+one, and the playlists you made in the Music app (itunes.py, read-only).
 
 Both sides end up as the same records, keyed by the file's path relative to the music folder ("rel"), which is also
 what the Garmin's track index and the FiiO card's layout are keyed by. So a track in a Summit playlist and the same
@@ -8,14 +9,16 @@ Playlist names are what the device shows and what its files are named after: rek
 path ("Gig - Warmup", as rekordbox_sd always has); Summit playlists flatten theirs the same way. When both sides have
 the same name, Summit's keeps it and the rekordbox one becomes "<name> (rekordbox)".
 
-The FiiO card mirrors the rekordbox collection plus every track in a Summit playlist; the Garmin gets the playlists
-you pick.
+Every source's playlists end up in one list (source "summit", "rekordbox" or "itunes") that both devices pick from.
+The FiiO card holds either the whole library (Summit's tracks, the rekordbox collection and the picked playlists) or
+only the picked playlists' tracks (selection()); the Garmin gets the playlists you pick.
 """
 
 import os
 import threading
 import time
 
+from . import itunes
 from . import rekordbox_sd as rb
 from .common import load_config
 
@@ -77,8 +80,9 @@ def _rekordbox(cfg, root, index, force):
 class Library:
     """Plain data (it is pickled into the Garmin worker process)."""
 
-    def __init__(self, root, tracks, playlists, mirror, rekordbox, counts):
+    def __init__(self, root, tracks, playlists, mirror, rekordbox, counts, itunes_status=None):
         self.library_root = root
+        self.itunes = itunes_status or {}
         self.tracks = tracks              # id -> record; ids are "rb:<TrackID>" or "s:<summit id>"
         self.syncable = {i: r for i, r in tracks.items() if r["rel"]}
         self.playlists = [(p["name"], p["ids"]) for p in playlists]  # what garmin.py / fiio.py iterate
@@ -87,6 +91,26 @@ class Library:
         self.rekordbox = rekordbox
         self.counts = counts
         self.missing = counts.pop("_missing_rels")
+        self.sid_by_rel = {r["rel"]: i[2:] for i, r in self.syncable.items() if i.startswith("s:")}  # card file -> Summit id
+
+    def selection(self, names=None, scope="library"):
+        """(tracks for the card {id: record}, [(name, ids)] playlists) for the FiiO card. names: the picked playlists
+        (None: all of them). scope "library": the whole library plus the picked playlists; "playlists": only theirs."""
+        pls = [(n, ids) for n, ids in self.playlists if names is None or n in set(names)]
+        picked = {i for _, ids in pls for i in ids if i in self.syncable}
+        if scope == "playlists":
+            return {i: self.syncable[i] for i in picked}, pls
+        return {**self.mirror, **{i: self.syncable[i] for i in picked}}, pls
+
+    def summit_ids(self, ids):
+        """A playlist's tracks as Summit track ids (the phone app's ids), in order; tracks Summit doesn't have drop."""
+        out = []
+        for i in ids:
+            r = self.syncable.get(i)
+            sid = i[2:] if i.startswith("s:") else self.sid_by_rel.get(r["rel"]) if r else None
+            if sid and sid not in out:
+                out.append(sid)
+        return out
 
     def playlist_tracks(self, name):
         for n, ids in self.playlists:
@@ -103,6 +127,7 @@ class Library:
         return {
             "library_root": self.library_root,
             "rekordbox": self.rekordbox,
+            "itunes": self.itunes,
             "tracks": len(self.syncable),
             "mirror": len(self.mirror), "mirror_bytes": sum(r["size"] for r in self.mirror.values()),
             **self.counts,
@@ -128,8 +153,8 @@ def _record(path, artist, name, secs, root, index, size=None):
 
 
 def build(summit, force=False):
-    """summit: {"tracks": {id: {path, artist, title, duration, size}}, "playlists": [{id, name, folder_path, ids}],
-    "liked": [ids]}, as the server hands it over."""
+    """summit: {"tracks": {id: {path, artist, title, duration, size}} (the whole library), "playlists": [{id, name,
+    folder_path, ids}], "liked": [ids]}, as the server hands it over."""
     cfg = load_config()
     root = library_root(cfg)
     if not os.path.isdir(root):
@@ -150,17 +175,39 @@ def build(summit, force=False):
     counts["outside"] += sum(1 for p in outside if p.startswith("/"))
     counts["missing"] += len(missing)
 
-    # Summit's tracks that are in a playlist (only those can reach a device)
+    # Summit's whole library (a track missing from the music folder only counts when a playlist wants it)
     wanted = {i for p in summit["playlists"] for i in p["ids"]} | set(summit.get("liked", []))
-    for sid in wanted:
-        t = summit["tracks"].get(sid)
-        if not t:
-            continue
+    by_rel = {}
+    for sid, t in summit["tracks"].items():
         rec, why = _record(t["path"], t["artist"], t["title"], int(t["duration"] or 0), root, index, t.get("size"))
         if rec is None:
+            if sid not in wanted:
+                continue
             counts[why] += 1
             rec = {"artist": t["artist"] or "", "name": t["title"] or "", "secs": "0", "path": None, "rel": None, "why": why}
+        else:
+            by_rel[rec["rel"]] = "s:" + sid
         tracks["s:" + sid] = rec
+
+    # A rekordbox track that is a file Summit has becomes Summit's track (one track per file on the device)
+    alias = {}
+    for tid in list(tracks):
+        if tid.startswith("rb:") and tracks[tid]["rel"] in by_rel:
+            alias[tid] = by_rel[tracks.pop(tid)["rel"]]
+
+    # The Music app's playlists: a file Summit has is Summit's track; any other gets its own record
+    it_status, it_playlists = itunes.read(force)
+    it_lists = []
+    for parts, paths in it_playlists:
+        ids = []
+        for path in paths:
+            rec, why = _record(path, "", os.path.splitext(os.path.basename(path))[0], 0, root, index)
+            if rec is None:
+                continue
+            tid = by_rel.get(rec["rel"]) or "it:" + rec["rel"]
+            tracks.setdefault(tid, rec)
+            ids.append(tid)
+        it_lists.append((parts, ids))
 
     # Playlists: Summit's first (they keep their names on a clash), then rekordbox's.
     pls, taken = [], set()
@@ -180,9 +227,12 @@ def build(summit, force=False):
         pls.append({"name": unique(name, ""), "label": " › ".join(p["folder_path"] + [p["name"]]), "source": "summit", "id": p["id"],
                     "ids": ["s:" + i for i in p["ids"]]})
     for name, ids in rplaylists:
-        pls.append({"name": unique(name, "rekordbox"), "label": name, "source": "rekordbox", "ids": ["rb:" + i for i in ids]})
+        pls.append({"name": unique(name, "rekordbox"), "label": name, "source": "rekordbox",
+                    "ids": [alias.get("rb:" + i, "rb:" + i) for i in ids]})
+    for parts, ids in it_lists:
+        pls.append({"name": unique(rb.flatten(parts), "iTunes"), "label": " › ".join(parts), "source": "itunes", "ids": ids})
 
-    mirror = {i for i in tracks if i.startswith("rb:")} | {i for p in pls if p["source"] == "summit" for i in p["ids"]}
-    status = dict(status, tracks=sum(1 for i in tracks if i.startswith("rb:")), playlists=len(rplaylists))
+    mirror = {i for i in tracks if i.startswith(("rb:", "s:"))}
+    status = dict(status, tracks=len(rtracks), playlists=len(rplaylists))
     counts["_missing_rels"] = missing_rels
-    return Library(root, tracks, pls, mirror, status, counts)
+    return Library(root, tracks, pls, mirror, status, counts, it_status)

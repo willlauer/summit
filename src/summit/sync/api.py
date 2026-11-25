@@ -117,6 +117,22 @@ def cached_contents(dev: str):
     return {"contents": _contents.get(dev)}
 
 
+def _fiio_picks(lib, body):
+    """Save the card's picks from a plan / sync request: {"playlists": [names] or null (all), "scope"}."""
+    if "playlists" not in body and "scope" not in body:
+        return
+    upd = {}
+    if "playlists" in body:
+        names = body["playlists"]
+        if names is not None:
+            known = {n for n, _ in lib.playlists}
+            names = [n for n in names if n in known]
+        upd["fiio_playlists"] = names
+    if body.get("scope") in ("library", "playlists"):
+        upd["fiio_scope"] = body["scope"]
+    common.save_config(upd)
+
+
 def _garmin_names(lib, body):
     names = body.get("playlists")
     if names is None:
@@ -149,6 +165,7 @@ def act(action: str, dev: str, body: dict = Body(default={})):
                 j = common.start_isolated_job("plan", dev, f"Previewing {name} sync", "summit.sync.garmin", "plan_summary",
                                               (lib, _garmin_names(lib, body)))
             else:
+                _fiio_picks(lib, body)
                 j = common.start_job("plan", dev, f"Previewing {name} sync", lambda j: fiio.plan(lib, j)["summary"])
         elif action == "sync":
             lib = library()
@@ -157,6 +174,7 @@ def act(action: str, dev: str, body: dict = Body(default={})):
                 common.save_config({"garmin_playlists": names})
                 j = common.start_isolated_job("sync", dev, f"Syncing {name}", "summit.sync.garmin", "apply", (lib, names))
             else:
+                _fiio_picks(lib, body)
                 j = common.start_job("sync", dev, f"Syncing {name}", lambda j: fiio.apply(lib, j))
         elif action == "wipe":
             if body.get("confirm") != "DELETE":

@@ -42,8 +42,13 @@ fun SearchScreen(ui: SearchUi, bottomPad: Dp) {
     val app = LocalApp.current
     val lib = app.repo.lib.collectAsStateWithLifecycle().value ?: return
     val q = ui.query
-    val songs = remember(q, lib) { lib.searchSongs(q) }
-    val artists = remember(q, lib) { lib.searchArtists(q) }
+    var songs by remember { mutableStateOf<List<Int>>(emptyList()) }
+    var artists by remember { mutableStateOf<List<com.willlauer.summit.data.Artist>>(emptyList()) }
+    LaunchedEffect(q, lib) {  // off the main thread, so typing never waits for the search; once typing pauses
+        if (q.isNotEmpty()) delay(140)
+        val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { lib.searchSongs(q) to lib.searchArtists(q) }
+        songs = r.first; artists = r.second
+    }
     var vibe by remember { mutableStateOf<List<Int>>(emptyList()) }
     var vibeLoading by remember { mutableStateOf(false) }
     var showAll by remember(q) { mutableStateOf(false) }
@@ -72,9 +77,7 @@ fun SearchScreen(ui: SearchUi, bottomPad: Dp) {
                     Spacer(Modifier.width(10.dp))
                     Box(Modifier.weight(1f)) {
                         if (q.isEmpty()) Text("Songs, artists, or a vibe like “rainy late night”", color = C.Faint, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        BasicTextField(q, { ui.query = it }, Modifier.fillMaxWidth().focusRequester(focus), singleLine = true,
-                            textStyle = MaterialTheme.typography.bodyLarge, cursorBrush = SolidColor(C.Cyan),
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = { fm.clearFocus() }))
+                        KeyField(q, { ui.query = it }, Modifier.fillMaxWidth().focusRequester(focus), onDone = { fm.clearFocus() })  // Summit's keyboard
                     }
                     if (q.isNotEmpty()) IconButton(onClick = { ui.query = "" }) { Icon(PI.Close, "Clear", tint = C.Muted) }
                 }
@@ -209,6 +212,14 @@ private fun LetterHeader(c: Char) {
 
 @Composable
 fun Chip(text: String, on: Boolean, small: Boolean = false, onClick: () -> Unit) {
+    if (Neon) {  // the desktop's segmented buttons: on = blue sign tint and edge
+        Box(Modifier.background(if (on) C.Sign.copy(alpha = .24f) else C.Tube.copy(alpha = .05f), Px).border(1.dp, if (on) C.Sign else C.Tube.copy(alpha = .35f), Px)
+            .clickable(onClick = onClick).padding(horizontal = if (small) 12.dp else 14.dp, vertical = if (small) 6.dp else 8.dp)) {
+            Text(text.uppercase(), style = MaterialTheme.typography.labelMedium.copy(fontSize = if (small) 11.sp else 12.sp, letterSpacing = 1.4.sp,
+                shadow = if (on) androidx.compose.ui.graphics.Shadow(C.Tube, androidx.compose.ui.geometry.Offset.Zero, 12f) else null), color = if (on) C.Hi else C.Tube)
+        }
+        return
+    }
     Box(
         Modifier.clip(Pill).background(if (on) C.Cyan else C.Raised).border(1.dp, if (on) Color.Transparent else C.Line, Pill).clickable(onClick = onClick)
             .padding(horizontal = if (small) 12.dp else 16.dp, vertical = if (small) 6.dp else 8.dp),
@@ -222,6 +233,31 @@ fun PlayShuffle(list: List<Int>, label: String, extra: (@Composable RowScope.() 
         PillButton("Play", PI.Play, { app.player.play(list, 0, label) }, primary = true, enabled = list.isNotEmpty())
         PillButton("Shuffle", PI.Shuffle, { app.player.play(list, 0, label, shuffle = true) }, enabled = list.isNotEmpty())
         extra?.invoke(this)
+    }
+}
+
+// ---------------- Album ----------------
+@Composable
+fun AlbumScreen(name: String, bottomPad: Dp) {
+    val app = LocalApp.current
+    val lib = app.repo.lib.collectAsStateWithLifecycle().value ?: return
+    val list = remember(name, lib) { lib.album(name) }
+    if (list.isEmpty()) { Empty("No album called $name"); return }
+    val artists = remember(list) { list.flatMap { com.willlauer.summit.data.splitArtists(lib.tracks[it].by) }.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.map { it.key } }
+    val by = if (artists.size > 3) "Various artists" else artists.joinToString(", ")
+    val dur = remember(list) { list.sumOf { lib.tracks[it].dur } }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = bottomPad + 16.dp)) {
+        item { Header(name, "$by · ${list.size} songs · ${fmtLong(dur)}", back = true) }
+        item { Art(list[0], 220.dp, Modifier.padding(horizontal = 16.dp, vertical = 8.dp), corner = 16.dp) }
+        item {
+            PlayShuffle(list, name) {
+                if (artists.size == 1) IconButton(onClick = { app.artist(artists[0]) }) { Icon(PI.Person, "Artist", tint = C.Muted) }
+            }
+        }
+        items(list, key = { "al$it" }) { i ->
+            SongRow(i, { app.player.play(list, list.indexOf(i), name) }, number = lib.tracks[i].no?.rem(100) ?: (list.indexOf(i) + 1),
+                subtitle = listOfNotNull(lib.tracks[i].by.takeIf { artists.size > 1 }, lib.tracks[i].bpm?.let { "$it BPM" }).joinToString(" · "))
+        }
     }
 }
 

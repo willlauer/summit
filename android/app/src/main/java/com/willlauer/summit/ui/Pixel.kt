@@ -38,6 +38,10 @@ import androidx.compose.ui.node.invalidateDraw
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.floor
@@ -50,14 +54,18 @@ private val pixelLook get() = LookState.current.pixel
 
 /** Polar night: a smooth, very dark gradient; [snow] adds square flakes snapped to the pixel grid. */
 @Composable
-fun Backdrop(modifier: Modifier = Modifier, snow: Boolean = false) {
+fun Backdrop(modifier: Modifier = Modifier, snow: Boolean = false, rain: Boolean = true) {
     var t by remember { mutableFloatStateOf(0f) }
     if (snow) LaunchedEffect(Unit) { val t0 = withFrameNanos { it }; while (true) { t = (withFrameNanos { it } - t0) / 1e9f } }
     val look = LookState.current
-    Canvas(modifier.fillMaxSize()) {
+    // Offscreen: the gradients are drawn once into a texture and reused, not redrawn every frame.
+    Canvas(modifier.fillMaxSize().graphicsLayer(compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen)) {
         val u = P.toPx()
         drawRect(Brush.verticalGradient(listOf(look.skyTop, look.bg, look.skyBottom)))
-        if (!look.pixel) {  // Classic: soft violet and cyan glows at the edges, round flakes
+        if (look.neon) {  // the desktop's rainy street: blue street-light haze from below, ice haze at the right, fine rain
+            drawRect(Brush.radialGradient(listOf(look.sign.copy(alpha = .26f), Color.Transparent), center = Offset(size.width * .5f, size.height * 1.15f), radius = size.width * 1.2f))
+            drawRect(Brush.radialGradient(listOf(look.tube.copy(alpha = .10f), Color.Transparent), center = Offset(size.width * .9f, size.height * 1.1f), radius = size.width * .8f))
+        } else if (!look.pixel) {  // Classic: soft violet and cyan glows at the edges, round flakes
             drawRect(Brush.radialGradient(listOf(Color(0x1FA874FF), Color.Transparent), center = Offset(size.width * .9f, -size.height * .05f), radius = size.width * 1.1f))
             drawRect(Brush.radialGradient(listOf(Color(0x143EE6FF), Color.Transparent), center = Offset(-size.width * .2f, size.height), radius = size.width))
         }
@@ -70,6 +78,7 @@ fun Backdrop(modifier: Modifier = Modifier, snow: Boolean = false) {
             drawRect(Color.White.copy(alpha = .25f + depth * .55f), Offset(floor(x / u) * u, floor(y / u) * u), Size(s, s))
         }
     }
+    if (look.neon && rain) Rain(modifier.fillMaxSize(), speed = .3f)  // the desktop's rain, slower than on the landing page
 }
 
 private fun hash(v: Float): Float { val s = sin(v * 12.9898f) * 43758.547f; return s - floor(s) }
@@ -84,6 +93,22 @@ fun LikeIcon(on: Boolean, size: Dp = 24.dp, modifier: Modifier = Modifier) =
 fun GameButton(text: String, icon: ImageVector?, onClick: () -> Unit, primary: Boolean = false, enabled: Boolean = true, modifier: Modifier = Modifier) {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
+    if (Neon) {  // the desktop's neon tube: cut corners, tube outline and inner glow, spaced capitals; primary is a lit sign
+        val fg = when { !enabled -> C.Faint; primary -> C.Hi; else -> C.Tube }
+        val bg = when { !enabled -> Color.Transparent; primary -> C.Sign; pressed -> C.Tube.copy(alpha = .18f); else -> C.Tube.copy(alpha = .06f) }
+        val edge = when { !enabled -> C.Line; primary -> Color.Transparent; else -> C.Tube.copy(alpha = .6f) }
+        val glow = androidx.compose.ui.graphics.Shadow(if (primary) Color.White.copy(alpha = .6f) else C.Tube, Offset.Zero, if (primary || pressed) 14f else 0f)
+        val shape = Px
+        val glowTop = (if (primary) Color.White else C.Tube).copy(alpha = if (primary) .22f else .12f)
+        Row(modifier.background(bg, shape).drawBehind {  // inset glow along the top, inside the cut-corner shape
+                drawOutline(shape.createOutline(size, layoutDirection, this), Brush.verticalGradient(listOf(glowTop, Color.Transparent), endY = size.height * .5f))
+            }.border(1.dp, edge, Px).clickable(src, null, enabled = enabled, onClick = onClick).padding(horizontal = 16.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+            if (icon != null) { Icon(icon, null, Modifier.size(18.dp), tint = fg); Spacer(Modifier.width(8.dp)) }
+            Text(text.uppercase(), style = MaterialTheme.typography.labelLarge.copy(letterSpacing = 2.2.sp, shadow = glow), color = fg, maxLines = 1)
+        }
+        return
+    }
     if (!pixelLook) {  // Classic: a frosted pill; primary is solid accent
         val fg = when { !enabled -> C.Faint; primary -> C.Ink; else -> C.Text }
         Row(modifier.clip(Pill).background(if (primary && enabled) C.Cyan else Color(0x1FFFFFFF)).border(1.dp, if (primary) Color.Transparent else C.Line, Pill)
@@ -192,13 +217,14 @@ fun RadioButton(selected: Boolean, onClick: () -> Unit, modifier: Modifier = Mod
 /** Text input in a pixel frame. */
 @Composable
 fun PixelField(value: String, onValueChange: (String) -> Unit, modifier: Modifier = Modifier, label: String? = null, placeholder: String? = null,
-               keyboardOptions: KeyboardOptions = KeyboardOptions.Default) {
+               keyboardOptions: KeyboardOptions = KeyboardOptions.Default, onDone: () -> Unit = {}) {
     Column(modifier) {
         if (label != null) { Text(label, style = MaterialTheme.typography.labelMedium, color = C.Muted); Spacer(Modifier.height(6.dp)) }
         Box(Modifier.fillMaxWidth().clip(Px).background(C.Raised).border(P, C.Line, Px).padding(horizontal = 14.dp, vertical = 12.dp)) {
             if (value.isEmpty() && placeholder != null) Text(placeholder, style = MaterialTheme.typography.bodyLarge, color = C.Faint)
-            BasicTextField(value, onValueChange, Modifier.fillMaxWidth(), singleLine = true, textStyle = MaterialTheme.typography.bodyLarge,
-                cursorBrush = SolidColor(C.Cyan), keyboardOptions = keyboardOptions)
+            KeyField(value, onValueChange, Modifier.fillMaxWidth(),  // Summit's keyboard (ui/Keyboard.kt)
+                digits = keyboardOptions.keyboardType == androidx.compose.ui.text.input.KeyboardType.Number || keyboardOptions.keyboardType == androidx.compose.ui.text.input.KeyboardType.NumberPassword,
+                capitalize = keyboardOptions.capitalization == androidx.compose.ui.text.input.KeyboardCapitalization.Sentences, onDone = onDone)
         }
     }
 }

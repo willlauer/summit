@@ -1,6 +1,7 @@
 package com.willlauer.summit.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -14,6 +15,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
@@ -75,6 +77,7 @@ private fun TrackSheet(i: Int, playlistId: Int?) {
     SheetItem(PI.PlaylistAdd, "Add to playlist…") { app.sheet = Sheet.AddTo(listOf(i)) }
     SheetItem(PI.Similar, "Similar songs") { app.similar(listOf(i)) }
     splitArtists(t.by).take(3).forEach { a -> SheetItem(PI.Person, "Go to $a") { app.artist(a) } }
+    if (lib.hasAlbum(i)) SheetItem(PI.Library, "Go to album: ${t.album}") { app.album(t.album!!) }
     SheetItem(PI.Compass, "Show on the map") { app.showOnMap(MapFocus(listOf(i), t.name, select = i)) }
     val on = t.id in liked
     SheetItem(null, if (on) "Unlike" else "Like", lead = { LikeIcon(on) }) { app.repo.toggleLike(i); close() }
@@ -276,13 +279,17 @@ private fun NameDialog(title: String, initial: String, confirm: String, onDone: 
     var name by remember { mutableStateOf(initial) }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-    AlertDialog(onDismissRequest = { app.dialog = null }, containerColor = C.Raised2, shape = PxBig, title = { Text(title) },
-        text = {
-            PixelField(name, { name = it }, Modifier.focusRequester(focus), placeholder = "Name",
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences))
-        },
-        confirmButton = { TextButton(onClick = { if (name.isNotBlank()) onDone(name.trim()) }, enabled = name.isNotBlank()) { Text(confirm) } },
-        dismissButton = { TextButton(onClick = { app.dialog = null }) { Text("Cancel") } })
+    KeyDialog({ app.dialog = null }) {
+        Text(title, style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(14.dp))
+        PixelField(name, { name = it }, Modifier.focusRequester(focus), placeholder = "Name",
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences), onDone = { if (name.isNotBlank()) onDone(name.trim()) })
+        Spacer(Modifier.height(14.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = { app.dialog = null }) { Text("Cancel") }
+            TextButton(onClick = { if (name.isNotBlank()) onDone(name.trim()) }, enabled = name.isNotBlank()) { Text(confirm) }
+        }
+    }
 }
 
 /** Switch the whole app between looks (Classic, Pixel). Remembered on this phone. */
@@ -297,6 +304,9 @@ fun LookPicker() {
 /** Streaming quality (playback.Streaming): Auto (high on Wi-Fi, data saver on cellular), High, or Data saver. */
 @Composable
 fun StreamingPicker() {
+    // On a synced card's player (the JM21) nothing streams: the card and Wi-Fi sync cover it.
+    val status by (androidx.compose.ui.platform.LocalContext.current.applicationContext as com.willlauer.summit.SummitApp).repo.status.collectAsStateWithLifecycle()
+    if (status == com.willlauer.summit.data.Status.Local) return
     val q by com.willlauer.summit.playback.Streaming.quality.collectAsStateWithLifecycle()
     Text("Streaming", style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(10.dp))
@@ -328,5 +338,155 @@ fun OfflinePanel() {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         if (st.running) Chip("Stop", false) { com.willlauer.summit.playback.OfflineSync.stop() }
         else Chip("Sync now", false) { com.willlauer.summit.playback.OfflineSync.start(summit) }
+    }
+}
+
+/** Settings › Card: the synced microSD card (data/Card.kt): what's on it, access, reload. Shown only where a card is. */
+@Composable
+fun CardPanel() {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val summit = ctx.applicationContext as com.willlauer.summit.SummitApp
+    val st by com.willlauer.summit.data.Card.state.collectAsStateWithLifecycle()
+    if (st.root == null && st.info == null) return
+    Text("Card", style = MaterialTheme.typography.titleMedium)
+    Spacer(Modifier.height(6.dp))
+    val info = st.info
+    if (info != null) {
+        val other = info.playlists.size
+        val synced = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(java.util.Date(info.synced * 1000))
+        Text("${info.files.size} tracks play from the card, no network needed" + if (other > 0) " · $other rekordbox / Music playlists" else "",
+            style = MaterialTheme.typography.bodyMedium)
+        Text("Synced $synced from Summit on the Mac (Sync › FiiO MicroSD)", style = MaterialTheme.typography.bodySmall, color = C.Muted)
+    } else Text(st.note, style = MaterialTheme.typography.bodyMedium)
+    Spacer(Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (!st.access) Chip("Allow access", false) {
+            ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                android.net.Uri.parse("package:${ctx.packageName}")).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+        Chip("Reload card", false) { summit.repo.refresh() }
+    }
+}
+
+/** Settings › Wi-Fi sync (data/Lan.kt): find Summit on this Wi-Fi, pair with the Mac's code, sync now. */
+@Composable
+fun WifiPanel() {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val summit = ctx.applicationContext as com.willlauer.summit.SummitApp
+    val st by com.willlauer.summit.data.Lan.state.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    var pairing by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var code by remember { mutableStateOf("") }
+    Text("Wi-Fi sync", style = MaterialTheme.typography.titleMedium)
+    Spacer(Modifier.height(6.dp))
+    if (st.paired) {
+        Text("Paired with ${st.name}" + when (st.reachable) { true -> " · on this Wi-Fi"; false -> " · not on this Wi-Fi"; null -> "" },
+            style = MaterialTheme.typography.bodyMedium)
+        val last = if (st.lastSync > 0) java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(java.util.Date(st.lastSync)) else "never"
+        Text("Last synced $last" + if (st.pending > 0) " · ${st.pending} change${if (st.pending == 1) "" else "s"} waiting" else "",
+            style = MaterialTheme.typography.bodySmall, color = C.Muted)
+    } else Text("Sync playlists and likes with Summit on the Mac over your Wi-Fi (no Tailscale). Turn on Wi-Fi sync in the Mac's Settings, then find it here.",
+        style = MaterialTheme.typography.bodyMedium)
+    if (st.total > 0) LinearProgressIndicator(progress = { st.done.toFloat() / st.total }, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), color = C.Cyan, trackColor = C.Line)
+    if (st.note.isNotEmpty()) Text(st.note + if (st.total > 0) " (${st.done} / ${st.total})" else "", style = MaterialTheme.typography.bodySmall, color = C.Muted)
+    Spacer(Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (st.paired) {
+            Chip(if (st.syncing) "Syncing…" else "Sync now", false) { if (!st.syncing) scope.launch { com.willlauer.summit.data.Lan.sync(summit) } }
+            Chip("Unpair", false) { com.willlauer.summit.data.Lan.unpair() }
+        } else Chip(if (st.searching) "Looking…" else "Find my Mac", false) { if (!st.searching) scope.launch { com.willlauer.summit.data.Lan.discover(summit) } }
+    }
+    st.found.forEach { f ->
+        Spacer(Modifier.height(6.dp))
+        Row(Modifier.fillMaxWidth().clip(Px).border(1.dp, C.Line, Px).clickable { pairing = f; code = "" }.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(f.first, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+            Text("Pair", style = MaterialTheme.typography.labelLarge, color = C.Cyan)
+        }
+    }
+    pairing?.let { f ->
+        val focus = remember { FocusRequester() }
+        LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+        val go = { if (code.length == 6) { val c = code; pairing = null; scope.launch { com.willlauer.summit.data.Lan.pair(summit, f.first, f.second, c) } } }
+        KeyDialog({ pairing = null }) {
+            Text("Pair with ${f.first.removePrefix("Summit on ")}", style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(8.dp))
+            Text("Enter the code from the Mac: Summit › Settings › Wi-Fi sync.", style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.height(12.dp))
+            PixelField(code, { code = it.filter(Char::isDigit).take(6) }, Modifier.focusRequester(focus), placeholder = "6-digit code",
+                keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword), onDone = { go() })
+            Spacer(Modifier.height(14.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = { pairing = null }) { Text("Cancel") }
+                TextButton(onClick = { go() }, enabled = code.length == 6) { Text("Pair") }
+            }
+        }
+    }
+}
+
+
+/** Settings › Updates: install the Mac's newer build over Wi-Fi (data/Updater.kt). */
+@Composable
+fun UpdatePanel() {
+    val summit = androidx.compose.ui.platform.LocalContext.current.applicationContext as com.willlauer.summit.SummitApp
+    val lan by com.willlauer.summit.data.Lan.state.collectAsStateWithLifecycle()
+    val st by com.willlauer.summit.data.Updater.state.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    if (!lan.paired) return
+    LaunchedEffect(lan.url) { com.willlauer.summit.data.Updater.check(summit) }
+    Text("Updates", style = MaterialTheme.typography.titleMedium)
+    Spacer(Modifier.height(6.dp))
+    val a = st.available
+    Text(if (a != null) "New version on the Mac: ${a.versionName}" else "This is ${com.willlauer.summit.BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodyMedium)
+    if (st.installing) LinearProgressIndicator(progress = { st.progress }, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), color = C.Cyan, trackColor = C.Line)
+    if (st.note.isNotEmpty()) Text(st.note, style = MaterialTheme.typography.bodySmall, color = C.Muted)
+    Spacer(Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (a != null) Chip(if (st.installing) "Installing…" else "Install update", true) { if (!st.installing) scope.launch { com.willlauer.summit.data.Updater.install(summit) } }
+        else Chip("Check", false) { scope.launch { com.willlauer.summit.data.Updater.check(summit) } }
+    }
+}
+
+/** Settings › Home screen & apps: Summit can be the device's home screen (the JM21); the other apps open from here. */
+@Composable
+fun AppsPanel() {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val pm = ctx.packageManager
+    val isHome = remember {
+        pm.resolveActivity(android.content.Intent(android.content.Intent.ACTION_MAIN).addCategory(android.content.Intent.CATEGORY_HOME), 0)
+            ?.activityInfo?.packageName == ctx.packageName
+    }
+    var open by remember { mutableStateOf(false) }
+    Text("Home screen & apps", style = MaterialTheme.typography.titleMedium)
+    Spacer(Modifier.height(6.dp))
+    Text(if (isHome) "Summit is the home screen: the Home button comes back here." else "Make Summit the home screen so the player starts in it and Home comes back to it.",
+        style = MaterialTheme.typography.bodyMedium)
+    Spacer(Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Chip(if (isHome) "Change home app" else "Make home screen", false) {
+            ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_HOME_SETTINGS).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+        Chip(if (open) "Hide apps" else "Other apps", open) { open = !open }
+        Chip("Android settings", false) {
+            ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_SETTINGS).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }
+    if (open) {
+        val apps = remember {
+            pm.queryIntentActivities(android.content.Intent(android.content.Intent.ACTION_MAIN).addCategory(android.content.Intent.CATEGORY_LAUNCHER), 0)
+                .filter { it.activityInfo.packageName != ctx.packageName }
+                .map { it to it.loadLabel(pm).toString() }.sortedBy { it.second.lowercase() }
+        }
+        Spacer(Modifier.height(8.dp))
+        apps.forEach { (ri, label) ->
+            val icon = remember(ri) { runCatching { ri.loadIcon(pm).let { d -> android.graphics.Bitmap.createBitmap(96, 96, android.graphics.Bitmap.Config.ARGB_8888).also { b -> d.setBounds(0, 0, 96, 96); d.draw(android.graphics.Canvas(b)) } }.asImageBitmap() }.getOrNull() }
+            Row(Modifier.fillMaxWidth().clip(Px).clickable {
+                ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_MAIN).addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+                    .setClassName(ri.activityInfo.packageName, ri.activityInfo.name).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (icon != null) androidx.compose.foundation.Image(icon, null, Modifier.size(36.dp)) else Spacer(Modifier.size(36.dp))
+                Spacer(Modifier.width(12.dp))
+                Text(label, style = MaterialTheme.typography.bodyLarge)
+            }
+        }
     }
 }

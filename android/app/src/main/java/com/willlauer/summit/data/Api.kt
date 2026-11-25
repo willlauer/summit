@@ -25,7 +25,9 @@ class Api(val http: OkHttpClient, var base: String) {
     private val JSON = "application/json".toMediaType()
 
     fun streamUrl(id: String) = "$base/stream/$id"
-    fun artUrl(id: String, size: Int = 256) = "$base/art/$id?s=$size"
+    /** The card's copy when the track is on a synced card (data/Card.kt), else the Mac's. */
+    fun artUrl(id: String, size: Int = 256) = Card.art(id)?.let { "file://${it.absolutePath}" }
+        ?: if (Card.state.value.info != null && !Lan.paired) "file:///none" else "$base/art/$id?s=$size"  // card mode: only the paired Mac on Wi-Fi
 
     private suspend fun call(method: String, path: String, body: JsonElement? = null, timeoutS: Long = 30): String = withContext(Dispatchers.IO) {
         val req = Request.Builder().url(base + path)
@@ -51,6 +53,7 @@ class Api(val http: OkHttpClient, var base: String) {
     suspend fun suggest(ids: List<String>, k: Int, space: String): List<Int> = json.decodeFromString(call("POST", "/api/suggest", buildJsonObject {
         putJsonArray("ids") { ids.forEach { add(it) } }; put("k", k); put("space", space)
     }))
+    suspend fun extPlaylists(): ExtPlaylists = json.decodeFromString(call("GET", "/api/extplaylists", timeoutS = 60))
     suspend fun like(id: String, liked: Boolean) { call("POST", "/api/likes", buildJsonObject { put("id", id); put("liked", liked) }) }
     /** The offline set (server.offline_set): the newest tracks that fit in [budgetMb], data-saver quality. */
     suspend fun offline(budgetMb: Int): OfflineSet = json.decodeFromString(call("GET", "/api/offline?budget_mb=$budgetMb", timeoutS = 60))

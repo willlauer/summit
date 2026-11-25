@@ -22,6 +22,8 @@ DEFAULTS = {
     "library_root": "~/Music/Music/Media.localized/Music",
     "fiio_mount": "/Volumes/Untitled",
     "fiio_android_root": "/storage/external_sd/Music",
+    "fiio_playlists": None,      # the playlists picked for the card (names); None = every playlist
+    "fiio_scope": "library",     # "library": the whole library + those playlists; "playlists": only their tracks
     "garmin_playlists": [],
     "garmin_bitrate": "320k",
     # Garmin .m3u8 line format: "garmin" = what Garmin Express writes

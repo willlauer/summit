@@ -9,11 +9,11 @@ import threading
 import time
 
 import numpy as np
-from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi import Body, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import clap_text, db, rekordbox
+from . import clap_text, db, lan, rekordbox
 from .config import DEFAULT_SPACE, MAX_DURATION, ROOT, SPACES, TAG_SPACE, WEB
 from .export import export_all
 from .layout import load, space_matrix, unit
@@ -121,7 +121,7 @@ class Library:
                     "id": i, "artist": r["artist"], "title": r["title"], "album": r["album"], "dur": round(r["duration"] or 0),
                     "ext": r["format"], "bpm": round(rbpm) if rbpm else round(r["bpm"]) if r["bpm"] else None,
                     "key": r["key"], "audition": r["audition"] or 0,
-                    "liked": i in liked_set, "added": round(r["added_at"] or 0),
+                    "liked": i in liked_set, "added": round(r["added_at"] or 0), "no": track_no(r["path"]),
                     **({} if lite else {"styles": self.styles[k], **tags.get(i, {"confirmed": [], "rejected": [], "auto": []})}),
                 })
             spaces, clusters, families = {}, {}, {}
@@ -202,6 +202,14 @@ class GzipApi:
 app.add_middleware(GzipApi)
 
 
+def track_no(path: str) -> int | None:
+    """Album order from the file name, as Music.app names files: "01 Title" -> 1, "2-03 Title" (disc 2) -> 203."""
+    import re
+
+    m = re.match(r"(?:(\d{1,2})-)?(\d{1,3})[ ._-]", Path(path).name)
+    return (int(m.group(1) or 0) * 100 + int(m.group(2))) if m else None
+
+
 def sync_source() -> dict:
     """Summit's side of device sync (sync/library.py): every playlist with its folder path, Liked, and their files."""
     with lib.lock:
@@ -217,12 +225,99 @@ def sync_source() -> dict:
 
         pls = [{"id": p["id"], "name": p["name"], "folder_path": path(p["folder"]), "ids": p["ids"]} for p in lib.playlists()]
         liked = [r[0] for r in lib.con.execute("SELECT track_id FROM likes ORDER BY created_at DESC")]
-        want = {i for p in pls for i in p["ids"]} | set(liked)
-        tracks = {i: {k: lib.rows[i][k] for k in ("path", "artist", "title", "duration", "size")} for i in want if i in lib.rows}
+        tracks = {i: {k: lib.rows[i][k] for k in ("path", "artist", "title", "duration", "size")} for i in lib.ids if i in lib.rows}
     return {"tracks": tracks, "playlists": pls, "liked": liked}
 
 
 sync_api.source = sync_source
+
+
+@app.get("/api/extplaylists")
+def ext_playlists():
+    """The rekordbox and Music app playlists in the app's format (read-only), for Wi-Fi sync to the phone / JM21."""
+    from .sync import fiio
+
+    try:
+        sl = sync_api.library()
+    except HTTPException:
+        return {"playlists": [], "folders": fiio.OTHER_FOLDERS}
+    return {"playlists": fiio.other_playlists(sl), "folders": fiio.OTHER_FOLDERS}
+
+
+@app.get("/api/lan/info", dependencies=[Depends(sync_api.local_only)])
+def lan_info():
+    a = apk_info()
+    return lan.info() | {"apk": {k: v for k, v in a.items() if k not in ("file", "dm")} if a else None}
+
+
+@app.post("/api/lan/settings", dependencies=[Depends(sync_api.local_only)])
+def lan_settings(enabled: bool | None = Body(None), new_code: bool = Body(False)):
+    return lan.settings(enabled, new_code)
+
+
+@app.delete("/api/lan/devices/{device_id}", dependencies=[Depends(sync_api.local_only)])
+def lan_forget(device_id: str):
+    return lan.forget(device_id)
+
+
+APK_DIRS = [ROOT / "android" / "app" / "build" / "outputs" / "apk" / v for v in ("release", "debug")]
+
+
+def apk_info() -> dict | None:
+    """The newest Android build on this Mac (what devices update to over Wi-Fi), from the build's own metadata.
+    Release builds (fast, what devices should run) and debug builds both count; the newer one wins."""
+    best = None
+    for d in APK_DIRS:
+        try:
+            meta = json.loads((d / "output-metadata.json").read_text())["elements"][0]
+            f = d / meta["outputFile"]
+            # the compile profile for Android 12+ (Android compiles the app with it at install: no interpreter lag)
+            dm = next((d / p for e in json.loads((d / "output-metadata.json").read_text()).get("baselineProfiles", [])
+                       if e.get("minApi", 0) >= 31 for p in e.get("baselineProfiles", [])), None)
+            info = {"versionCode": meta["versionCode"], "versionName": meta["versionName"], "bytes": f.stat().st_size,
+                    "built": f.stat().st_mtime, "file": f, "dm": dm if dm and dm.exists() else None}
+        except (OSError, ValueError, KeyError, IndexError):
+            continue
+        if best is None or info["versionCode"] > best["versionCode"]:
+            best = info
+    return best
+
+
+@app.get("/api/app/version")
+def app_version():
+    a = apk_info()
+    return {k: v for k, v in a.items() if k not in ("file", "dm")} | {"profile": bool(a["dm"])} if a else {"versionCode": 0}
+
+
+@app.get("/api/app/apk")
+def app_apk():
+    a = apk_info()
+    if not a:
+        raise HTTPException(404, "no Android build on this Mac")
+    return FileResponse(a["file"], media_type="application/vnd.android.package-archive", filename="summit.apk")
+
+
+@app.get("/api/app/profile")
+def app_profile():
+    a = apk_info()
+    if not a or not a["dm"]:
+        raise HTTPException(404, "no compile profile")
+    return FileResponse(a["dm"], media_type="application/octet-stream", filename="summit.dm")
+
+
+@app.get("/api/lan/hello")
+def lan_hello():
+    return {"summit": True, "name": lan.mac_name(), "version": VERSION}
+
+
+@app.post("/api/lan/pair")
+def lan_pair(code: str = Body(...), name: str = Body("device")):
+    token = lan.pair(code, name)
+    if not token:
+        raise HTTPException(403, "Wrong code (see Settings › Wi-Fi sync on the Mac)")
+    return {"token": token, "name": lan.mac_name()}
+sync_api.fiio.app_library = lambda: lib.payload(lite=True)  # the phone app's library, written to the card for the JM21 app
+sync_api.fiio.art_file = lambda tid: art_file(lib.rows[tid], 256) if tid in lib.rows else None
 app.include_router(sync_api.router)
 
 
@@ -247,6 +342,10 @@ def _startup() -> None:
     from .media import coverage
 
     streaming.apply()  # keep the Mac awake while serving, if on
+    try:
+        lan.start(app)  # Wi-Fi sync listener for the phone / JM21 (lan.py)
+    except Exception as e:
+        print("Wi-Fi sync listener failed:", e)
     c = coverage(lib.con)
     if any(v["ready"] < v["total"] for v in c.values()):
         stream_job.start()  # finish the phone copies in the background

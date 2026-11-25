@@ -1,5 +1,11 @@
 package com.willlauer.summit.ui
 
+import kotlinx.coroutines.flow.distinctUntilChanged
+
+import kotlinx.coroutines.flow.map
+
+import androidx.compose.ui.graphics.graphicsLayer
+
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -79,7 +85,7 @@ fun AddButton(i: Int) {
     val active by app.repo.active.collectAsStateWithLifecycle()
     val has = remember(pls, active, i) { app.repo.inActive(i) }
     val haptic = LocalHapticFeedback.current
-    val tint by animateColorAsState(if (has) C.Green else C.Muted, label = "add")
+    val tint = if (has) C.Green else C.Muted
     IconButton(onClick = { haptic.performHapticFeedback(HapticFeedbackType.Confirm); app.add(i) }) {
         Icon(if (has) PI.CheckBox else PI.AddBox, if (has) "In playlist" else "Add", tint = tint)
     }
@@ -97,12 +103,15 @@ fun SongRow(
 ) {
     val app = LocalApp.current
     val lib = app.repo.lib.collectAsStateWithLifecycle().value ?: return
-    val ps by app.player.state.collectAsStateWithLifecycle()
+    // Only "is this row the current track / is it playing" — not the whole player state, which ticks twice a second
+    // while music plays and would rebuild every visible row each time.
+    val now by remember(i) { app.player.state.map { (it.current == i) to (it.current == i && it.playing) }.distinctUntilChanged() }
+        .collectAsStateWithLifecycle(false to false)
     val pls by app.repo.playlists.collectAsStateWithLifecycle()
     val active by app.repo.active.collectAsStateWithLifecycle()
     val dim = remember(pls, active, i) { playlistId == null && app.repo.inActive(i) }
     val t = lib.tracks[i]
-    val playing = ps.current == i
+    val playing = now.first
     Row(
         modifier.fillMaxWidth()
             .combinedClickable(onClick = onClick, onLongClick = { app.sheet = Sheet.Track(i, playlistId) })
@@ -113,7 +122,7 @@ fun SongRow(
         if (number != null) Text("$number", Modifier.width(26.dp), style = MaterialTheme.typography.labelMedium, color = C.Faint)
         Box(Modifier.alpha(if (dim) .45f else 1f)) {
             Art(i, 46.dp)
-            if (playing) Box(Modifier.matchParentSize().clip(Px).background(Color(0x88000000)), contentAlignment = Alignment.Center) { Equalizer(ps.playing) }
+            if (playing) Box(Modifier.matchParentSize().background(Color(0x88000000), Px), contentAlignment = Alignment.Center) { Equalizer(now.second) }
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f).alpha(if (dim) .5f else 1f)) {
@@ -176,8 +185,24 @@ fun Header(title: String, subtitle: String? = null, back: Boolean = false, actio
             Spacer(Modifier.weight(1f))
             actions()
         }
-        Text(title, Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.headlineMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        if (Neon) NeonTitle(title, Modifier.padding(horizontal = 16.dp))
+        else Text(title, Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.headlineMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
         if (subtitle != null) Text(subtitle, Modifier.padding(horizontal = 16.dp, vertical = 2.dp), style = MaterialTheme.typography.bodyMedium, color = C.Muted)
+    }
+}
+
+/** The desktop's h1: Michroma capitals, a blue / ice chromatic split either side, and a blue glow. */
+@Composable
+fun NeonTitle(text: String, modifier: Modifier = Modifier, style: androidx.compose.ui.text.TextStyle = MaterialTheme.typography.headlineMedium, maxLines: Int = 2,
+              flicker: Boolean = true) {
+    val t = text.uppercase()
+    // strikes on like a neon sign the first time it shows
+    var on by remember(text) { mutableFloatStateOf(if (flicker) 0f else 1f) }
+    if (flicker) LaunchedEffect(text) { for (v in floatArrayOf(.7f, .1f, .9f, .4f, 1f)) { on = v; kotlinx.coroutines.delay(55) } }
+    Box(modifier.graphicsLayer { alpha = on }) {
+        Text(t, Modifier.offset(x = (-1.5).dp), style = style.copy(shadow = null), color = C.Sign.copy(alpha = .85f), maxLines = maxLines, overflow = TextOverflow.Ellipsis)
+        Text(t, Modifier.offset(x = 1.5.dp), style = style.copy(shadow = null), color = C.Tube.copy(alpha = .85f), maxLines = maxLines, overflow = TextOverflow.Ellipsis)
+        Text(t, style = style, color = C.Hi, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -188,7 +213,7 @@ fun PillButton(text: String, icon: ImageVector?, onClick: () -> Unit, primary: B
 @Composable
 fun SectionTitle(text: String, modifier: Modifier = Modifier, action: (@Composable () -> Unit)? = null) {
     Row(modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 18.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(text, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+        Text(if (Neon) text.uppercase() else text, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
         action?.invoke()
     }
 }

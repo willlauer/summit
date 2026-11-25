@@ -17,6 +17,7 @@ import androidx.media3.datasource.cache.ContentMetadata
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import com.willlauer.summit.SummitApp
+import com.willlauer.summit.data.Card
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -70,7 +71,7 @@ object Streaming {
     }
 
     fun onPhone(key: String) = caches.any { fullyCached(it, key) }
-    fun trackOnPhone(id: String) = onPhone(cacheKey(id, "high")) || onPhone(cacheKey(id, "low"))
+    fun trackOnPhone(id: String) = Card.has(id) || onPhone(cacheKey(id, "high")) || onPhone(cacheKey(id, "low"))
 
     fun metered(ctx: Context) = (ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager).isActiveNetworkMetered
 
@@ -87,12 +88,14 @@ object Streaming {
     fun streamSpec(uri: Uri, id: String, q: String): DataSpec =
         DataSpec.Builder().setUri(uri.buildUpon().clearQuery().appendQueryParameter("q", q).build()).setKey(cacheKey(id, q)).build()
 
-    /** /stream/<id> → /stream/<id>?q=…, with a cache key per quality. */
+    /** /stream/<id> → the file on a synced card (data/Card.kt) when it's there, else /stream/<id>?q=… with a cache key
+     *  per quality. */
     @OptIn(UnstableApi::class)
     fun resolve(ctx: Context, spec: DataSpec): DataSpec {
         val uri = spec.uri
         if (uri.pathSegments.getOrNull(uri.pathSegments.size - 2) != "stream") return spec
         val id = uri.lastPathSegment ?: return spec
+        Card.file(id)?.let { return spec.buildUpon().setUri(Uri.fromFile(it)).setKey(null).build() }
         val q = qualityFor(ctx, id)
         return spec.buildUpon().setUri(uri.buildUpon().clearQuery().appendQueryParameter("q", q).build()).setKey(cacheKey(id, q)).build()
     }
@@ -131,7 +134,8 @@ class Precacher(private val ctx: Context, private val cacheFactory: CacheDataSou
             for (uri in upcoming) {
                 if (!isActive) break
                 val spec = Streaming.resolve(ctx, DataSpec(uri))
-                if (Streaming.onPhone(spec.key!!)) continue
+                val key = spec.key ?: continue  // on the card: nothing to download
+                if (Streaming.onPhone(key)) continue
                 runCatching {
                     val w = CacheWriter(cacheFactory.createDataSource(), spec, null, null)
                     writer = w
@@ -167,7 +171,7 @@ object OfflineSync {
     @Volatile private var writer: CacheWriter? = null
 
     fun start(app: SummitApp) {
-        if (job?.isActive == true) return
+        if (job?.isActive == true || app.repo.local) return  // a synced card is the offline copy; never contact the Mac
         job = scope.launch { runCatching { sync(app) }.onFailure { state.value = state.value.copy(running = false, note = "Couldn't sync: ${it.message}") } }
     }
 
@@ -187,7 +191,8 @@ object OfflineSync {
         val cache = app.offlineCache
         if (Streaming.metered(app)) { state.value = state.value.copy(running = false, note = "Waiting for Wi-Fi"); return }
         state.value = state.value.copy(running = true, note = "Checking…")
-        val set = app.repo.api.offline(BUDGET_MB)
+        val all = app.repo.api.offline(BUDGET_MB)
+        val set = all.copy(tracks = all.tracks.filter { !Card.has(it.id) }, bytes = all.tracks.filter { !Card.has(it.id) }.sumOf { it.bytes })  // the card has the rest
         val want = set.tracks.associateBy { Streaming.cacheKey(it.id, "low") }
         cache.keys.filter { it !in want }.forEach { cache.removeResource(it) }  // left the newest 6 GB
         val todo = set.tracks.filter { !Streaming.fullyCached(cache, Streaming.cacheKey(it.id, "low")) }

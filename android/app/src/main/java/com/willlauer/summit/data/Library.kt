@@ -83,6 +83,14 @@ class Library(p: LibraryPayload) {
             .sortedWith(compareBy({ if (it.letter == '#') 1 else 0 }, { Artist.sortKey(it.name) }))
     }
     private val artistByNorm = artists.associateBy { it.norm }
+
+    /** Albums by normalised name, tracks in album order. "Unknown Album" and untitled ones aren't albums. */
+    private val albums: Map<String, List<Int>> by lazy {
+        tracks.indices.filter { hasAlbum(it) }.groupBy { albumN[it] }
+            .mapValues { (_, v) -> v.sortedWith(compareBy({ tracks[it].no ?: 9999 }, { titleN[it] })) }
+    }
+    fun hasAlbum(i: Int) = albumN[i].isNotBlank() && albumN[i] != "unknown album"
+    fun album(name: String): List<Int> = albums[norm(name)].orEmpty()
     fun artist(name: String) = artistByNorm[norm(name)]
 
     val byTitle: List<Int> by lazy { tracks.indices.sortedBy { titleN[it].removePrefix("the ") } }

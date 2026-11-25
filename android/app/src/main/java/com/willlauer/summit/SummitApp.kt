@@ -30,9 +30,11 @@ import java.util.concurrent.TimeUnit
 class SummitApp : Application(), SingletonImageLoader.Factory {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val http: OkHttpClient by lazy {
-        OkHttpClient.Builder().connectTimeout(8, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).retryOnConnectionFailure(true).build()
+        OkHttpClient.Builder().addInterceptor(com.willlauer.summit.data.LanTokenInterceptor()).connectTimeout(8, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).retryOnConnectionFailure(true).build()
     }
     lateinit var repo: Repo
+    /** No activity has started in this process yet (MainActivity shows the landing page on a fresh home-screen start). */
+    var freshStart = true
     lateinit var player: PlayerConnection
 
     @get:OptIn(UnstableApi::class)
@@ -48,12 +50,18 @@ class SummitApp : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
         super.onCreate()
+        com.willlauer.summit.data.Lan.init(this)
         repo = Repo(this, Api(http, Repo.DEFAULT_SERVER), scope)
         player = PlayerConnection(this, repo, scope)
         player.connect()
-        scope.launch { repo.lib.filterNotNull().first(); player.onLibrary(); com.willlauer.summit.playback.OfflineSync.start(this@SummitApp) }
+        scope.launch {
+            repo.lib.filterNotNull().first(); player.onLibrary()
+            repo.status.first { it !is com.willlauer.summit.data.Status.Loading }  // card mode is known by now: it never streams
+            com.willlauer.summit.playback.OfflineSync.start(this@SummitApp)
+        }
         com.willlauer.summit.playback.Streaming.init(this, listOf(offlineCache, mediaCache))
         com.willlauer.summit.playback.OfflineSync.watchWifi(this)
+        com.willlauer.summit.data.Lan.watchWifi(this)
         repo.refresh()
     }
 

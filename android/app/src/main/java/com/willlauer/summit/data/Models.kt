@@ -18,6 +18,7 @@ data class Track(
     val audition: Double = 0.0,
     val liked: Boolean = false,
     val added: Long = 0,
+    val no: Int? = null,   // album order (from the file name)
 ) {
     val name get() = title ?: "Untitled"
     val by get() = artist ?: "Unknown Artist"
@@ -51,6 +52,7 @@ data class LibraryPayload(
     val playlists: List<Playlist> = emptyList(),
     val folders: List<Folder> = emptyList(),
     val liked: List<String> = emptyList(),
+    val card: CardInfo? = null,   // only in Summit/library.json on a synced card (data/Card.kt)
 )
 
 @Serializable

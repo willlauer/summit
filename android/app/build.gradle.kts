@@ -17,7 +17,8 @@ android {
         applicationId = "com.willlauer.summit"
         minSdk = 31
         targetSdk = 37
-        versionCode = commits
+        // Minutes since 2026: always higher for a newer build (committed or not), so Wi-Fi updates know what's newer.
+        versionCode = (System.currentTimeMillis() / 60_000 - 29_455_200).toInt()
         versionName = "0.1.$commits ($describe)"
     }
     buildTypes {

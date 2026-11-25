@@ -55,6 +55,7 @@ class AppState(val repo: Repo, val player: PlayerConnection, val scope: Coroutin
         nav.navigate(t.route) { popUpTo(nav.graph.findStartDestination().id) { saveState = true }; launchSingleTop = true; restoreState = true }
     }
     fun artist(name: String) = go("artist/" + android.net.Uri.encode(name))
+    fun album(name: String) = go("album/" + android.net.Uri.encode(name))
     fun playlist(id: Int) = go("playlist/$id")
     fun similar(chain: List<Int>) = go("similar/" + chain.joinToString(","))
     fun showOnMap(f: MapFocus) {
